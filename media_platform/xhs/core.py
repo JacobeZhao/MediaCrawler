@@ -345,13 +345,18 @@ class XiaoHongShuCrawler(AbstractCrawler):
             utils.logger.info(f"[XiaoHongShuCrawler.get_comments] Begin get note id comments {note_id}")
             # Use fixed crawling interval
             crawl_interval = config.CRAWLER_MAX_SLEEP_SEC
-            await self.xhs_client.get_note_all_comments(
-                note_id=note_id,
-                xsec_token=xsec_token,
-                crawl_interval=crawl_interval,
-                callback=xhs_store.batch_update_xhs_note_comments,
-                max_count=config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES,
-            )
+            try:
+                await self.xhs_client.get_note_all_comments(
+                    note_id=note_id,
+                    xsec_token=xsec_token,
+                    crawl_interval=crawl_interval,
+                    callback=xhs_store.batch_update_xhs_note_comments,
+                    max_count=config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES,
+                )
+            except Exception as e:
+                utils.logger.warning(
+                    f"[XiaoHongShuCrawler.get_comments] Failed to get comments for note {note_id}, skipping. Error: {e}"
+                )
 
             # Sleep after fetching comments
             await asyncio.sleep(crawl_interval)

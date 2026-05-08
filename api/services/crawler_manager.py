@@ -20,6 +20,8 @@ import asyncio
 import subprocess
 import signal
 import os
+import shutil
+import sys
 from typing import Optional, List
 from datetime import datetime
 from pathlib import Path
@@ -113,8 +115,12 @@ class CrawlerManager:
             # Build command line arguments
             cmd = self._build_command(config)
 
-            # Log start information
-            entry = self._create_log_entry(f"Starting crawler: {' '.join(cmd)}", "info")
+            # Log start information (omit cookies to keep log compact)
+            safe_cmd = [a if not a.startswith("a1=") else "<cookies>"] + [] if False else [
+                ("<cookies>" if i > 0 and cmd[i - 1] == "--cookies" else a)
+                for i, a in enumerate(cmd)
+            ]
+            entry = self._create_log_entry(f"Starting crawler: {' '.join(safe_cmd)}", "info")
             await self._push_log(entry)
 
             try:
@@ -204,7 +210,10 @@ class CrawlerManager:
 
     def _build_command(self, config: CrawlerStartRequest) -> list:
         """Build main.py command line arguments"""
-        cmd = ["uv", "run", "python", "main.py"]
+        if shutil.which("uv"):
+            cmd = ["uv", "run", "python", "main.py"]
+        else:
+            cmd = [sys.executable, "main.py"]
 
         cmd.extend(["--platform", config.platform.value])
         cmd.extend(["--lt", config.login_type.value])
@@ -224,6 +233,11 @@ class CrawlerManager:
 
         cmd.extend(["--get_comment", "true" if config.enable_comments else "false"])
         cmd.extend(["--get_sub_comment", "true" if config.enable_sub_comments else "false"])
+        cmd.extend(["--max_notes_count", str(config.max_notes_count)])
+        cmd.extend(["--max_comments_count_singlenotes", str(config.max_comments_count)])
+
+        if config.save_data_path:
+            cmd.extend(["--save_data_path", config.save_data_path])
 
         if config.cookies:
             cmd.extend(["--cookies", config.cookies])

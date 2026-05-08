@@ -71,6 +71,9 @@ class CrawlerStartRequest(BaseModel):
     save_option: SaveDataOptionEnum = SaveDataOptionEnum.JSONL
     cookies: str = ""
     headless: bool = False
+    max_notes_count: int = 15
+    max_comments_count: int = 10
+    save_data_path: str = ""
 
 
 class CrawlerStatusResponse(BaseModel):
