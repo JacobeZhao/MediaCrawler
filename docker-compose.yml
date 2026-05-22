@@ -1,0 +1,27 @@
+services:
+  media-crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: media-crawler:latest
+    container_name: media-crawler
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Docker 环境强制覆盖：无头模式、不连接外部 CDP 浏览器
+      HEADLESS: "true"
+      CDP_CONNECT_EXISTING: "false"
+    volumes:
+      # 爬取结果文件（JSONL/CSV 等临时输出）
+      - ./data:/app/data
+      # 浏览器 Cookie / 登录态缓存（跨重启保留）
+      - ./browser_data:/app/browser_data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

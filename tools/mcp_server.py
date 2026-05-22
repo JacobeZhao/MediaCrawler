@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
-# Ensure project root is importable as a package root
-PROJECT_ROOT = Path(__file__).parent
+# tools/ 在项目根目录下一级，需要上移到项目根才能 import api.*
+PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mcp.server.fastmcp import FastMCP
