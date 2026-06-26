@@ -11,14 +11,15 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from tools import utils
+from config.settings import settings
 from . import service_db as sdb
 from .crawler_engine import XHSCrawlerEngine
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 ROTATION_INTERVAL = 900      # 15 minutes
-COOLDOWN_DURATION = 600      # 10 minutes cooldown before auto-retry
-HEALTH_CHECK_INTERVAL = 300  # 5 minutes
+COOLDOWN_DURATION = settings.account_cooldown_base_sec
+HEALTH_CHECK_INTERVAL = settings.account_health_check_interval_sec
 
 
 def _is_hard_auth_error(error: Optional[str]) -> bool:
@@ -80,6 +81,7 @@ class AccountPool:
         self._current_index: int = 0
         self._last_rotated_at: float = 0.0
         self._cool_until: Dict[int, float] = {}  # id(engine) -> monotonic recovery ts
+        self._failure_counts: Dict[int, int] = {}
 
         self._rotation_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
@@ -145,9 +147,10 @@ class AccountPool:
         utils.logger.warning("[AccountPool] default engine marked captcha")
 
     async def mark_temporarily_unavailable(
-        self, engine: XHSCrawlerEngine, duration: int = COOLDOWN_DURATION
+        self, engine: XHSCrawlerEngine, duration: Optional[int] = None
     ):
         """Mark engine as cooling-down for `duration` seconds."""
+        duration = duration or self._next_cooldown_duration(engine)
         engine.status = EngineStatus.COOLING_DOWN.value
         engine.message = f"account temporarily unavailable; retry after {duration}s"
         self._cool_until[id(engine)] = time.monotonic() + duration
@@ -213,6 +216,7 @@ class AccountPool:
             if ok:
                 new_status = sdb.AccountStatus.ACTIVE
                 eng.status = EngineStatus.READY.value
+                self._failure_counts.pop(id(eng), None)
             elif is_captcha:
                 new_status = sdb.AccountStatus.CAPTCHA
             elif is_cooling_down:
@@ -221,7 +225,7 @@ class AccountPool:
                 new_status = sdb.AccountStatus.COOLING_DOWN
                 eng.status = EngineStatus.COOLING_DOWN.value
                 eng.message = "login probe failed; cooling down before retry"
-                self._cool_until[id(eng)] = time.monotonic() + COOLDOWN_DURATION
+                self._cool_until[id(eng)] = time.monotonic() + self._next_cooldown_duration(eng)
             else:
                 new_status = sdb.AccountStatus.INVALID
             if not usable and not is_captcha and not is_cooling_down and new_status == sdb.AccountStatus.INVALID:
@@ -327,6 +331,13 @@ class AccountPool:
                         f"[AccountPool] engine account_id={eng.account_id} "
                         "cooldown finished; awaiting health check"
                     )
+
+    def _next_cooldown_duration(self, engine: XHSCrawlerEngine) -> int:
+        eid = id(engine)
+        failures = self._failure_counts.get(eid, 0) + 1
+        self._failure_counts[eid] = failures
+        duration = settings.account_cooldown_base_sec * (2 ** max(0, failures - 1))
+        return int(min(duration, settings.account_cooldown_max_sec))
 
     async def _start_engine(self, account_id: int, name: str, cookie: str) -> bool:
         user_data_dir = os.path.join(_PROJECT_ROOT, "browser_data", f"account_{account_id}")

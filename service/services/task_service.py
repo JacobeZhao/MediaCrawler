@@ -4,6 +4,7 @@ from typing import Dict, List
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
+from config.settings import settings
 from ..schemas.tasks import (
     BatchCreatorTaskRequest,
     BatchSearchTaskRequest,
@@ -68,6 +69,8 @@ class TaskService:
 
     async def create_batch_search_tasks(self, req: BatchSearchTaskRequest):
         self._ensure_engine_started()
+        if len(req.keywords) > settings.max_batch_tasks:
+            raise HTTPException(400, f"Batch size exceeds MAX_BATCH_TASKS={settings.max_batch_tasks}.")
         task_ids: List[int] = []
         resumed = 0
         skipped = 0
@@ -147,6 +150,8 @@ class TaskService:
 
     async def create_batch_creator_tasks(self, req: BatchCreatorTaskRequest):
         self._ensure_engine_started()
+        if len(req.creator_urls) > settings.max_batch_tasks:
+            raise HTTPException(400, f"Batch size exceeds MAX_BATCH_TASKS={settings.max_batch_tasks}.")
         task_ids: List[int] = []
         resumed = 0
         skipped = 0
@@ -183,6 +188,8 @@ class TaskService:
         self._ensure_engine_started()
         if not req.notes:
             raise HTTPException(400, "Provide at least one note.")
+        if len(req.notes) > settings.max_batch_tasks:
+            raise HTTPException(400, f"Batch size exceeds MAX_BATCH_TASKS={settings.max_batch_tasks}.")
         params = {"notes": [n.model_dump() for n in req.notes]}
         task_id = await self._task_manager.submit(TaskType.NOTE.value, params)
         return {"task_id": task_id, "message": f"Task created for {len(req.notes)} notes."}

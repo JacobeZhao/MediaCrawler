@@ -33,6 +33,7 @@ from media_platform.xhs.login import XiaoHongShuLogin
 from store import xhs as xhs_store
 from tools import utils
 from var import crawler_type_var, source_keyword_var
+from .rate_limiter import rate_limiter
 
 
 class CaptchaException(Exception):
@@ -392,6 +393,9 @@ class XHSCrawlerEngine:
             cookie_dict=cookie_dict,
         )
 
+    async def _before_request(self, endpoint: str):
+        await rate_limiter.acquire(self.account_id, endpoint)
+
     async def _do_search(
         self,
         keyword: str,
@@ -438,6 +442,7 @@ class XHSCrawlerEngine:
         while total_notes < effective_target:
             utils.logger.info(f"[search] keyword={keyword} page={page}")
             try:
+                await self._before_request("search")
                 notes_res = await self._xhs_client.get_note_by_keyword(
                     keyword=keyword,
                     search_id=search_id,
@@ -541,7 +546,7 @@ class XHSCrawlerEngine:
                     total_notes,
                     total_comments,
                 )
-            await asyncio.sleep(random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC))
+            await asyncio.sleep(random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC) * 2)
             if not notes_res.get("has_more", False):
                 break
 
@@ -633,6 +638,7 @@ class XHSCrawlerEngine:
                 await _safe_call(progress_cb, f"Collected {total_notes} notes")
 
         try:
+            await self._before_request("creator")
             await self._xhs_client.get_all_notes_by_creator(
                 user_id=user_id,
                 crawl_interval=random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC),
@@ -684,8 +690,10 @@ class XHSCrawlerEngine:
     ) -> Optional[Dict]:
         async with semaphore:
             try:
+                await self._before_request("detail")
                 nd = await self._xhs_client.get_note_by_id(note_id, xsec_source, xsec_token)
                 if not nd:
+                    await self._before_request("detail")
                     nd = await self._xhs_client.get_note_by_id_from_html(
                         note_id, xsec_source, xsec_token, enable_cookie=True
                     )
@@ -737,6 +745,7 @@ class XHSCrawlerEngine:
                         count,
                     )
 
+            await self._before_request("comment")
             await self._xhs_client.get_note_all_comments(
                 note_id=note_id,
                 xsec_token=xsec_token,
@@ -822,7 +831,9 @@ class XHSCrawlerEngine:
 
             utils.logger.info(f"[fetch_note_via_browser] navigating to {url}")
             # domcontentloaded avoids hanging on SPA background network requests
+            await self._before_request("detail")
             await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC))
 
             # Wait until window.__INITIAL_STATE__.note.noteDetailMap is populated by JS
             js_ready = "() => !!(window.__INITIAL_STATE__ && window.__INITIAL_STATE__.note && Object.keys(window.__INITIAL_STATE__.note.noteDetailMap || {}).length > 0)"

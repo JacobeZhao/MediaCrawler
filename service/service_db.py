@@ -185,6 +185,19 @@ async def init_service_db():
                 created_at    TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crawl_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                account_id  INTEGER,
+                task_id     INTEGER,
+                endpoint    TEXT,
+                error_type  TEXT,
+                message     TEXT
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_crawl_events_type_time ON crawl_events(event_type, created_at)")
         await db.commit()
 
 
@@ -635,6 +648,50 @@ async def get_active_accounts() -> List[Dict]:
         cursor = await db.execute(
             "SELECT * FROM accounts WHERE status=? ORDER BY id",
             (AccountStatus.ACTIVE.value,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def add_crawl_event(
+    event_type: str,
+    *,
+    account_id: Optional[int] = None,
+    task_id: Optional[int] = None,
+    endpoint: Optional[str] = None,
+    error_type: Optional[str] = None,
+    message: Optional[str] = None,
+) -> int:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO crawl_events "
+            "(created_at, event_type, account_id, task_id, endpoint, error_type, message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_now(), event_type, account_id, task_id, endpoint, error_type, message),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def count_recent_crawl_events(event_types: List[str], since_iso: str) -> int:
+    if not event_types:
+        return 0
+    placeholders = ",".join("?" for _ in event_types)
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM crawl_events WHERE event_type IN ({placeholders}) AND created_at >= ?",
+            (*event_types, since_iso),
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else 0
+
+
+async def list_recent_crawl_events(limit: int = 50) -> List[Dict]:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM crawl_events ORDER BY created_at DESC LIMIT ?",
+            (limit,),
         )
         rows = await cursor.fetchall()
     return [dict(r) for r in rows]

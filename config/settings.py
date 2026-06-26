@@ -16,6 +16,13 @@ def _int_env(name: str, default: int) -> int:
     return int(raw)
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return float(raw)
+
+
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
 
@@ -48,10 +55,27 @@ class Settings:
         os.path.join(ROOT_DIR, "data", "service.lock"),
     )
 
-    crawler_min_sleep_sec: int = _int_env("CRAWLER_MIN_SLEEP_SEC", 1)
-    crawler_max_sleep_sec: int = _int_env("CRAWLER_MAX_SLEEP_SEC", 2)
+    crawler_min_sleep_sec: int = _int_env("CRAWLER_MIN_SLEEP_SEC", 3)
+    crawler_max_sleep_sec: int = _int_env("CRAWLER_MAX_SLEEP_SEC", 7)
+    crawler_global_min_interval_sec: float = _float_env("CRAWLER_GLOBAL_MIN_INTERVAL_SEC", 2.0)
+    crawler_account_min_interval_sec: float = _float_env("CRAWLER_ACCOUNT_MIN_INTERVAL_SEC", 8.0)
+    crawler_search_min_interval_sec: float = _float_env("CRAWLER_SEARCH_MIN_INTERVAL_SEC", 10.0)
+    crawler_detail_min_interval_sec: float = _float_env("CRAWLER_DETAIL_MIN_INTERVAL_SEC", 8.0)
+    crawler_comment_min_interval_sec: float = _float_env("CRAWLER_COMMENT_MIN_INTERVAL_SEC", 12.0)
+    crawler_creator_min_interval_sec: float = _float_env("CRAWLER_CREATOR_MIN_INTERVAL_SEC", 12.0)
     crawler_max_notes_count: int = _int_env("CRAWLER_MAX_NOTES_COUNT", 15)
     crawler_max_comments_count_single_note: int = _int_env("CRAWLER_MAX_COMMENTS_COUNT_SINGLE_NOTE", 10)
+    account_cooldown_base_sec: int = _int_env("ACCOUNT_COOLDOWN_BASE_SEC", 600)
+    account_cooldown_max_sec: int = _int_env("ACCOUNT_COOLDOWN_MAX_SEC", 43200)
+    account_health_check_interval_sec: int = _int_env("ACCOUNT_HEALTH_CHECK_INTERVAL_SEC", 900)
+    task_pause_on_account_error: bool = _bool_env("TASK_PAUSE_ON_ACCOUNT_ERROR", True)
+    circuit_window_sec: int = _int_env("CIRCUIT_WINDOW_SEC", 600)
+    circuit_pause_sec: int = _int_env("CIRCUIT_PAUSE_SEC", 3600)
+    circuit_error_threshold: int = _int_env("CIRCUIT_ERROR_THRESHOLD", 3)
+    task_max_account_switches: int = _int_env("TASK_MAX_ACCOUNT_SWITCHES", 1)
+    task_max_runtime_sec: int = _int_env("TASK_MAX_RUNTIME_SEC", 7200)
+    max_queue_size: int = _int_env("MAX_QUEUE_SIZE", 200)
+    max_batch_tasks: int = _int_env("MAX_BATCH_TASKS", 50)
 
 
 settings = Settings()

@@ -24,7 +24,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from playwright.async_api import BrowserContext, Page
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_not_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
 from tools.httpx_util import make_async_client
 
 import config
@@ -202,7 +202,6 @@ class XiaoHongShuClient(AbstractApiClient):
         self.headers.update(headers)
         return self.headers
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_not_exception_type(NoteNotFoundError))
     async def request(self, method, url, **kwargs) -> Union[str, Any]:
         """
         Wrapper for httpx common request method, processes request response
@@ -216,8 +215,23 @@ class XiaoHongShuClient(AbstractApiClient):
         """
         # return response.text
         return_response = kwargs.pop("return_response", False)
-        async with make_async_client() as client:
-            response = await client.request(method, url, timeout=self.timeout, **kwargs)
+        response = None
+        for attempt in range(3):
+            try:
+                async with make_async_client() as client:
+                    response = await client.request(method, url, timeout=self.timeout, **kwargs)
+                break
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+                if attempt >= 2:
+                    raise
+                wait_for = min(8, 2 ** attempt)
+                utils.logger.warning(
+                    f"[XiaoHongShuClient.request] transient network error; "
+                    f"retrying in {wait_for}s: {type(exc).__name__}"
+                )
+                await asyncio.sleep(wait_for)
+        if response is None:
+            raise DataFetchError("No response returned from request")
 
         if response.status_code == 471 or response.status_code == 461:
             # someday someone maybe will bypass captcha
@@ -775,7 +789,19 @@ class XiaoHongShuClient(AbstractApiClient):
         data = {"original_url": f"{self._domain}/discovery/item/{note_id}"}
         return await self.post(uri, data=data, return_response=True)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_not_exception_type(
+            (
+                NoteNotFoundError,
+                XHSAuthError,
+                XHSCaptchaError,
+                XHSPermissionError,
+                XHSRateLimitError,
+            )
+        ),
+    )
     async def get_note_by_id_from_html(
         self,
         note_id: str,

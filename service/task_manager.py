@@ -9,7 +9,9 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
+from config.settings import settings
 from . import service_db as db
+from .circuit_breaker import circuit_breaker
 from .crawler_engine import CaptchaException, _is_recoverable_account_error
 
 if TYPE_CHECKING:
@@ -82,6 +84,8 @@ class TaskManager:
             self._current_task_id = None
 
     async def submit(self, task_type: str, params: dict) -> int:
+        if self.queue_size() >= settings.max_queue_size:
+            raise ValueError(f"Task queue is full ({settings.max_queue_size}).")
         task_id = await db.create_task(task_type, params)
         await self._enqueue(task_id)
         return task_id
@@ -147,6 +151,21 @@ class TaskManager:
                 self._queue.task_done()
 
     async def _run(self, task_id: int):
+        if circuit_breaker.is_open():
+            await db.update_task_status(
+                task_id,
+                db.TaskStatus.PAUSED,
+                progress="paused by risk circuit breaker",
+                progress_data=_progress_data(
+                    "paused",
+                    f"risk circuit breaker open until {circuit_breaker.open_until.isoformat()}",
+                ),
+                lease_owner=None,
+                heartbeat_at=None,
+                lease_expires_at=None,
+            )
+            return
+
         claimed = await db.claim_task(task_id, self._lease_owner, lease_seconds=_LEASE_SECONDS)
         if not claimed:
             return
@@ -180,6 +199,23 @@ class TaskManager:
         tried_engines: set = set()
 
         for attempt in range(max_retries):
+            if circuit_breaker.is_open():
+                await db.update_task_status_if_owned(
+                    task_id,
+                    self._lease_owner,
+                    db.TaskStatus.PAUSED,
+                    progress="paused by risk circuit breaker",
+                    progress_data=_progress_data(
+                        "paused",
+                        f"risk circuit breaker open until {circuit_breaker.open_until.isoformat()}",
+                    ),
+                    lease_owner=None,
+                    heartbeat_at=None,
+                    lease_expires_at=None,
+                )
+                self._current_task_id = None
+                return
+
             eng = await self._pool.get_healthy_engine()
 
             if eng is None:
@@ -285,8 +321,33 @@ class TaskManager:
                 if isinstance(exc, CaptchaException) or _is_recoverable_account_error(exc):
                     if isinstance(exc, CaptchaException):
                         await self._pool.mark_captcha(eng)
+                        event_type = "captcha"
                     else:
                         await self._pool.mark_temporarily_unavailable(eng)
+                        event_type = "account_error"
+                    await circuit_breaker.record_risk_event(
+                        event_type,
+                        account_id=eng.account_id,
+                        task_id=task_id,
+                        message=str(exc),
+                    )
+                    if settings.task_pause_on_account_error:
+                        await db.update_task_status_if_owned(
+                            task_id,
+                            self._lease_owner,
+                            db.TaskStatus.PAUSED,
+                            error=f"account protection pause: {type(exc).__name__}",
+                            progress="paused for account protection",
+                            progress_data=_progress_data(
+                                "paused",
+                                f"paused for account protection: {type(exc).__name__}",
+                            ),
+                            lease_owner=None,
+                            heartbeat_at=None,
+                            lease_expires_at=None,
+                        )
+                        self._current_task_id = None
+                        return
                     heartbeat_ok = await db.heartbeat_task(
                         task_id,
                         self._lease_owner,
