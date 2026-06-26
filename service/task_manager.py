@@ -195,10 +195,29 @@ class TaskManager:
                 message=msg,
             )
 
-        max_retries = max(self._pool.pool_size() + 1, 3)
+        max_retries = min(
+            max(self._pool.pool_size() + 1, 3),
+            max(1, settings.task_max_account_switches + 1),
+        )
         tried_engines: set = set()
+        run_started_at = datetime.now()
 
         for attempt in range(max_retries):
+            if (datetime.now() - run_started_at).total_seconds() > settings.task_max_runtime_sec:
+                await db.update_task_status_if_owned(
+                    task_id,
+                    self._lease_owner,
+                    db.TaskStatus.PAUSED,
+                    error="task runtime budget exceeded",
+                    progress="paused after reaching runtime budget",
+                    progress_data=_progress_data("paused", "paused after reaching runtime budget"),
+                    lease_owner=None,
+                    heartbeat_at=None,
+                    lease_expires_at=None,
+                )
+                self._current_task_id = None
+                return
+
             if circuit_breaker.is_open():
                 await db.update_task_status_if_owned(
                     task_id,
