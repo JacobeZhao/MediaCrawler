@@ -19,7 +19,7 @@
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -29,11 +29,7 @@ from tools.httpx_util import make_async_client
 
 import config
 from base.base_crawler import AbstractApiClient
-from proxy.proxy_mixin import ProxyRefreshMixin
 from tools import utils
-
-if TYPE_CHECKING:
-    from proxy.proxy_ip_pool import ProxyIpPool
 
 from .exception import DataFetchError, IPBlockError, NoteNotFoundError
 from .field import SearchNoteType, SearchSortType
@@ -42,19 +38,49 @@ from .extractor import XiaoHongShuExtractor
 from .playwright_sign import sign_with_xhshow
 
 
-class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
+class XHSRemoteError(DataFetchError):
+    """Base error for non-success XHS remote responses."""
 
     def __init__(
         self,
-        timeout=60,  # If media crawling is enabled, Xiaohongshu long videos need longer timeout
-        proxy=None,
+        message: str,
+        *,
+        code: Optional[int] = None,
+        status_code: Optional[int] = None,
+        response_text: str = "",
+    ):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.response_text = response_text
+
+
+class XHSAuthError(XHSRemoteError):
+    """XHS rejected the request because login/session is invalid."""
+
+
+class XHSRateLimitError(XHSRemoteError, IPBlockError):
+    """XHS rate-limited or blocked the current account/IP."""
+
+
+class XHSCaptchaError(XHSRemoteError):
+    """XHS requires CAPTCHA/risk verification."""
+
+
+class XHSPermissionError(XHSRemoteError):
+    """XHS denied access to the requested resource."""
+
+
+class XiaoHongShuClient(AbstractApiClient):
+
+    def __init__(
+        self,
+        timeout=60,
         *,
         headers: Dict[str, str],
         playwright_page: Page,
         cookie_dict: Dict[str, str],
-        proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):
-        self.proxy = proxy
         self.timeout = timeout
         self.headers = headers
         if config.XHS_INTERNATIONAL:
@@ -72,8 +98,72 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         self.playwright_page = playwright_page
         self.cookie_dict = cookie_dict
         self._extractor = XiaoHongShuExtractor()
-        # Initialize proxy pool (from ProxyRefreshMixin)
-        self.init_proxy_pool(proxy_ip_pool)
+
+    def _build_remote_error(
+        self,
+        message: str,
+        *,
+        code: Optional[int] = None,
+        status_code: Optional[int] = None,
+        response_text: str = "",
+    ) -> XHSRemoteError:
+        msg_lower = message.lower()
+        if status_code in (461, 471) or "captcha" in msg_lower:
+            return XHSCaptchaError(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        if status_code in (401, 403) or code in (401, 403):
+            error_cls = XHSAuthError if status_code == 401 or code == 401 else XHSPermissionError
+            return error_cls(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        if status_code == 429 or code == self.IP_ERROR_CODE:
+            return XHSRateLimitError(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        if (
+            "unauthorized" in msg_lower
+            or "login" in msg_lower
+            or "session" in msg_lower
+            or "cookie" in msg_lower
+            or "登录" in message
+            or "登陆" in message
+        ):
+            return XHSAuthError(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        if "rate limit" in msg_lower or "too many requests" in msg_lower:
+            return XHSRateLimitError(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        if "forbidden" in msg_lower or "permission" in msg_lower:
+            return XHSPermissionError(
+                message,
+                code=code,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        return XHSRemoteError(
+            message,
+            code=code,
+            status_code=status_code,
+            response_text=response_text,
+        )
 
     async def _pre_headers(self, url: str, params: Optional[Dict] = None, payload: Optional[Dict] = None) -> Dict:
         """请求头参数签名 (使用 xhshow 纯算法)
@@ -124,34 +214,45 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         Returns:
 
         """
-        # Check if proxy is expired before each request
-        await self._refresh_proxy_if_expired()
-
         # return response.text
         return_response = kwargs.pop("return_response", False)
-        async with make_async_client(proxy=self.proxy) as client:
+        async with make_async_client() as client:
             response = await client.request(method, url, timeout=self.timeout, **kwargs)
 
         if response.status_code == 471 or response.status_code == 461:
             # someday someone maybe will bypass captcha
-            verify_type = response.headers["Verifytype"]
-            verify_uuid = response.headers["Verifyuuid"]
+            verify_type = response.headers.get("Verifytype", "")
+            verify_uuid = response.headers.get("Verifyuuid", "")
             msg = f"CAPTCHA appeared, request failed, Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, Response: {response}"
             utils.logger.error(msg)
-            raise Exception(msg)
+            raise self._build_remote_error(
+                msg,
+                status_code=response.status_code,
+                response_text=response.text,
+            )
 
         if return_response:
             return response.text
         data: Dict = response.json()
-        if data["success"]:
+        if data.get("success"):
             return data.get("data", data.get("success", {}))
-        elif data["code"] == self.IP_ERROR_CODE:
-            raise IPBlockError(self.IP_ERROR_STR)
-        elif data["code"] in (self.NOTE_NOT_FOUND_CODE, self.NOTE_ABNORMAL_CODE):
-            raise NoteNotFoundError(f"Note not found or abnormal, code: {data['code']}")
+        elif data.get("code") == self.IP_ERROR_CODE:
+            raise self._build_remote_error(
+                self.IP_ERROR_STR,
+                code=data.get("code"),
+                status_code=response.status_code,
+                response_text=response.text,
+            )
+        elif data.get("code") in (self.NOTE_NOT_FOUND_CODE, self.NOTE_ABNORMAL_CODE):
+            raise NoteNotFoundError(f"Note not found or abnormal, code: {data.get('code')}")
         else:
             err_msg = data.get("msg", None) or f"{response.text}"
-            raise DataFetchError(err_msg)
+            raise self._build_remote_error(
+                err_msg,
+                code=data.get("code"),
+                status_code=response.status_code,
+                response_text=response.text,
+            )
 
     @staticmethod
     def _build_query_string(params: Dict) -> str:
@@ -205,10 +306,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         )
 
     async def get_note_media(self, url: str) -> Union[bytes, None]:
-        # Check if proxy is expired before request
-        await self._refresh_proxy_if_expired()
-
-        async with make_async_client(proxy=self.proxy) as client:
+        async with make_async_client() as client:
             try:
                 response = await client.request("GET", url, timeout=self.timeout)
                 response.raise_for_status()
@@ -233,9 +331,11 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         Returns:
             Dict: User info if logged in, None otherwise
         """
+        if not self.cookie_dict.get("a1"):
+            return None
         uri = "/api/sns/web/v1/user/selfinfo"
         headers = await self._pre_headers(uri, params={})
-        async with make_async_client(proxy=self.proxy) as client:
+        async with make_async_client() as client:
             response = await client.get(f"{self._host}{uri}", headers=headers)
             if response.status_code == 200:
                 return response.json()
@@ -338,8 +438,16 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         uri = "/api/sns/web/v1/feed"
         res = await self.post(uri, data)
         if res and res.get("items"):
-            res_dict: Dict = res["items"][0]["note_card"]
-            return res_dict
+            first_item = res["items"][0]
+            if isinstance(first_item, dict):
+                note_card = first_item.get("note_card")
+                if isinstance(note_card, dict):
+                    return note_card
+                utils.logger.warning(
+                    "[XiaoHongShuClient.get_note_by_id] note_card missing "
+                    f"for note id:{note_id}, item keys:{list(first_item.keys())}"
+                )
+                return dict()
         # When crawling frequently, some notes may have results while others don't
         utils.logger.error(
             f"[XiaoHongShuClient.get_note_by_id] get note id:{note_id} empty and res:{res}"

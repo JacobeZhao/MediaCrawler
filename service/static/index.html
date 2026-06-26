@@ -1,0 +1,215 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XHS Crawler Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-title">XHS Crawler Console</div>
+        <div class="brand-subtitle">小红书采集服务运维台</div>
+      </div>
+      <div class="top-actions">
+        <span id="servicePill" class="pill neutral">加载中</span>
+        <span class="pill neutral">队列 <b id="queueSize">0</b></span>
+        <span class="pill neutral">可用账号 <b id="readyAccounts">0</b>/<b id="totalAccounts">0</b></span>
+        <span class="muted small-text" id="lastRefresh">未刷新</span>
+        <button class="btn ghost small" id="refreshBtn">刷新</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <div id="apiError" class="alert hidden"></div>
+
+    <section class="grid-overview" aria-label="任务总览">
+      <div class="metric"><div class="metric-label">运行中</div><div class="metric-value" id="mRunning">0</div><div class="metric-foot">正在占用账号执行</div></div>
+      <div class="metric"><div class="metric-label">等待中</div><div class="metric-value" id="mPending">0</div><div class="metric-foot">队列内待执行</div></div>
+      <div class="metric"><div class="metric-label">暂停/失败</div><div class="metric-value" id="mBlocked">0</div><div class="metric-foot" id="mBlockedText">异常任务</div></div>
+      <div class="metric"><div class="metric-label">累计笔记</div><div class="metric-value" id="mNotes">0</div><div class="metric-foot">当前任务口径</div></div>
+      <div class="metric"><div class="metric-label">累计评论</div><div class="metric-value" id="mComments">0</div><div class="metric-foot">当前任务口径</div></div>
+      <div class="metric"><div class="metric-label">账号可用率</div><div class="metric-value" id="mAccountRate">0%</div><div class="metric-foot" id="mAccountText">暂无账号</div></div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel account-panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">账号池</h2>
+            <div class="panel-note">账号状态会直接影响队列是否继续执行</div>
+          </div>
+          <button class="btn primary small" id="healthBtn">健康检查</button>
+        </div>
+        <div class="panel-body">
+          <div class="account-summary">
+            <div class="mini-stat"><span class="small-text muted">可用</span><b id="aReady">0</b></div>
+            <div class="mini-stat"><span class="small-text muted">验证码</span><b id="aCaptcha">0</b></div>
+            <div class="mini-stat"><span class="small-text muted">异常</span><b id="aBad">0</b></div>
+            <div class="mini-stat"><span class="small-text muted">总数</span><b id="aTotal">0</b></div>
+          </div>
+          <div class="account-list" id="accountList"></div>
+          <div class="row mt-md">
+            <button class="btn ghost" id="openCookieBtn">添加 Cookie</button>
+            <button class="btn ghost" id="qrBtn">二维码登录</button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="panel workspace-panel">
+        <div class="panel-head">
+          <div class="panel-title-block">
+            <h2 class="panel-title">任务列表</h2>
+            <div class="panel-note">实时展示每个任务的笔记数、评论数、目标和最近状态</div>
+          </div>
+          <div class="task-toolbar">
+            <select class="select task-status-filter" id="taskStatusFilter">
+              <option value="">全部状态</option>
+              <option value="running">运行中</option>
+              <option value="pending">等待中</option>
+              <option value="paused">已暂停</option>
+              <option value="failed">失败</option>
+              <option value="completed">完成</option>
+            </select>
+            <input class="input task-keyword-filter" id="taskKeywordFilter" placeholder="筛关键词">
+            <button class="btn ghost" id="exportBtn">导出 Excel</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th>任务</th>
+                <th class="col-status">状态</th>
+                <th class="col-note-progress">笔记进度</th>
+                <th class="col-comments">评论</th>
+                <th>最近消息</th>
+                <th class="col-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody id="taskRows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="panel create-panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">创建任务</h2>
+              <div class="panel-note">选择爬取方式后，可提交单个或批量任务</div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="tabs task-type-tabs">
+              <button class="tab active" type="button" data-task-type="search">搜索词</button>
+              <button class="tab" type="button" data-task-type="creator">博主</button>
+              <button class="tab" type="button" data-task-type="note">笔记</button>
+            </div>
+            <div class="mode-tabs mt-sm">
+              <button class="mode-tab active" type="button" data-task-mode="single">单个</button>
+              <button class="mode-tab" type="button" data-task-mode="batch">批量</button>
+            </div>
+
+            <form id="searchSingleForm" class="task-form mt-md" data-task-form="search-single">
+              <div class="field"><label class="label">关键词</label><input class="input" name="keyword" placeholder="例如：宝宝面条" required></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
+                <div class="field"><label class="label">每篇评论</label><input class="input" name="max_comments" type="number" min="0" max="10000" value="10000"></div>
+                <div class="field"><label class="label">排序</label><select class="select" name="sort_type"><option value="popularity_descending">热度</option><option value="time_descending">最新</option><option value="general">默认</option></select></div>
+                <div class="field"><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
+              </div>
+              <label class="row small-text mt-sm"><input type="checkbox" name="force"> 强制重爬</label>
+              <button class="btn primary full-width mt-md">提交搜索任务</button>
+            </form>
+
+            <form id="searchBatchForm" class="task-form hidden mt-md" data-task-form="search-batch">
+              <div class="field"><label class="label">关键词列表</label><textarea class="textarea" name="keywords" placeholder="每行一个关键词"></textarea></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
+                <div class="field"><label class="label">每篇评论</label><input class="input" name="max_comments" type="number" min="0" max="10000" value="10000"></div>
+                <div class="field"><label class="label">排序</label><select class="select" name="sort_type"><option value="popularity_descending">热度</option><option value="time_descending">最新</option><option value="general">默认</option></select></div>
+                <div class="field"><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
+              </div>
+              <button class="btn primary full-width mt-md">提交批量搜索</button>
+            </form>
+
+            <form id="creatorSingleForm" class="task-form hidden mt-md" data-task-form="creator-single">
+              <div class="field"><label class="label">博主主页或用户 ID</label><input class="input" name="creator_input" required></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
+                <label class="row small-text align-end"><input type="checkbox" name="force"> 强制重爬</label>
+              </div>
+              <button class="btn blue full-width mt-md">提交博主任务</button>
+            </form>
+
+            <form id="creatorBatchForm" class="task-form hidden mt-md" data-task-form="creator-batch">
+              <div class="field"><label class="label">博主列表</label><textarea class="textarea" name="creator_urls" placeholder="每行一个博主主页或用户 ID"></textarea></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
+              </div>
+              <button class="btn blue full-width mt-md">提交批量博主</button>
+            </form>
+
+            <form id="noteSingleForm" class="task-form hidden mt-md" data-task-form="note-single">
+              <div class="field"><label class="label">笔记链接或 ID</label><input class="input" name="note_input" placeholder="粘贴单篇笔记链接或 ID" required></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">D 分层</label><input class="input" name="d_level" value="D1"></div>
+                <div class="field"><label class="label">质量</label><input class="input" name="quality" value="未标注"></div>
+              </div>
+              <button class="btn dark full-width mt-md">提交笔记任务</button>
+            </form>
+
+            <form id="noteBatchForm" class="task-form hidden mt-md" data-task-form="note-batch">
+              <div class="field"><label class="label">笔记列表</label><textarea class="textarea" name="inputs" placeholder="每行一个笔记链接或 ID"></textarea></div>
+              <div class="form-grid mt-sm">
+                <div class="field"><label class="label">D 分层</label><input class="input" name="d_level" value="D1"></div>
+                <div class="field"><label class="label">质量</label><input class="input" name="quality" value="未标注"></div>
+              </div>
+              <button class="btn dark full-width mt-md">提交批量笔记</button>
+            </form>
+          </div>
+      </aside>
+    </section>
+  </main>
+</div>
+
+<div class="modal" id="cookieModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <b id="cookieModalTitle">添加 Cookie</b>
+      <button class="btn ghost small" data-close="cookieModal">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label class="label">账号备注</label><input class="input" id="accountName" placeholder="例如：账号-1"></div>
+      <div class="field mt-md"><label class="label">Cookie</label><textarea class="textarea cookie-textarea" id="accountCookie"></textarea></div>
+      <button class="btn primary full-width mt-md" id="saveCookieBtn">保存并验证</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="qrModal">
+  <div class="modal-card qr-modal-card">
+    <div class="modal-head">
+      <b>二维码登录</b>
+      <button class="btn ghost small" id="closeQrBtn">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label class="label">账号备注</label><input class="input" id="qrAccountName" value="new-account"></div>
+      <button class="btn primary full-width mt-md" id="startQrBtn">生成二维码</button>
+      <img id="qrImage" class="qr-img hidden" alt="登录二维码">
+      <div class="muted small-text text-center" id="qrMessage">生成后请扫码确认登录</div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+
+</body>
+</html>
+
+

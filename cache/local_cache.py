@@ -28,10 +28,7 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from cache.abs_cache import AbstractCache
-
-
-class ExpiringLocalCache(AbstractCache):
+class ExpiringLocalCache:
 
     def __init__(self, cron_interval: int = 10):
         """

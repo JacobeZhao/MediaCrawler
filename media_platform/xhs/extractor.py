@@ -41,12 +41,19 @@ class XiaoHongShuExtractor:
             # Either a CAPTCHA appeared or the note doesn't exist
             return None
 
-        state = re.findall(r"window.__INITIAL_STATE__=({.*})</script>", html)[
-            0
-        ].replace("undefined", '""')
+        matches = re.findall(r"window.__INITIAL_STATE__=({.*})</script>", html)
+        if not matches:
+            return None
+        state = matches[0].replace("undefined", '""')
         if state != "{}":
             note_dict = humps.decamelize(json.loads(state))
-            return note_dict["note"]["note_detail_map"][note_id]["note"]
+            note_map = note_dict.get("note", {}).get("note_detail_map", {})
+            if note_id in note_map:
+                return note_map[note_id].get("note")
+            # note_id may differ from key; return the only entry if unambiguous
+            if len(note_map) == 1:
+                only = next(iter(note_map.values()))
+                return only.get("note") if isinstance(only, dict) else None
         return None
 
     def extract_creator_info_from_html(self, html: str) -> Optional[Dict]:

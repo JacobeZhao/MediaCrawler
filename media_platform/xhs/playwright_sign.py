@@ -23,12 +23,15 @@
 # 许可协议: MIT License
 
 import hashlib
+import inspect
 import json
 import time
 from typing import Any, Dict, Optional, Union
 from urllib.parse import quote
 
 from .xhs_sign import get_trace_id
+
+_XHSHOW_BUILD_HAS_HEX_MD5_PATH = False
 
 
 def _patch_xhshow_a3_hash():
@@ -45,12 +48,18 @@ def _patch_xhshow_a3_hash():
     """
     from xhshow.core.crypto import CryptoProcessor
 
+    global _XHSHOW_BUILD_HAS_HEX_MD5_PATH
     _original_build = CryptoProcessor.build_payload_array
+    original_signature = inspect.signature(_original_build)
+    _XHSHOW_BUILD_HAS_HEX_MD5_PATH = "hex_md5_path" in original_signature.parameters
 
-    def _patched_build(self, hex_parameter, a1_value, app_identifier="xhs-pc-web",
-                       string_param="", timestamp=None, sign_state=None):
-        payload = _original_build(self, hex_parameter, a1_value, app_identifier,
-                                  string_param, timestamp, sign_state)
+    def _patched_build(self, *args, **kwargs):
+        payload = _original_build(self, *args, **kwargs)
+        try:
+            bound = original_signature.bind_partial(self, *args, **kwargs)
+            string_param = bound.arguments.get("string_param", "")
+        except TypeError:
+            string_param = kwargs.get("string_param", "")
         # 仅当 content_string 不含 "{" 时修复 (即 GET 请求)
         if "{" not in string_param:
             correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
@@ -67,6 +76,31 @@ def _patch_xhshow_a3_hash():
 
 # 启动时应用 monkey-patch
 _patch_xhshow_a3_hash()
+
+
+def _build_payload_array_compatible(
+    crypto_processor,
+    d_value: str,
+    a1_value: str,
+    content_string: str,
+    ts: float,
+) -> list[int]:
+    if _XHSHOW_BUILD_HAS_HEX_MD5_PATH:
+        return crypto_processor.build_payload_array(
+            d_value,
+            d_value,
+            a1_value,
+            "xhs-pc-web",
+            content_string,
+            ts,
+        )
+    return crypto_processor.build_payload_array(
+        d_value,
+        a1_value,
+        "xhs-pc-web",
+        content_string,
+        ts,
+    )
 
 
 def _build_sign_string(uri: str, data: Optional[Union[Dict, str]] = None, method: str = "POST") -> str:
@@ -148,8 +182,12 @@ def sign_with_xhshow(
         ts = time.time()
         d_value = hashlib.md5(content_string.encode("utf-8")).hexdigest()
 
-        payload_array = xhshow_client.crypto_processor.build_payload_array(
-            d_value, a1_value, "xhs-pc-web", content_string, ts
+        payload_array = _build_payload_array_compatible(
+            xhshow_client.crypto_processor,
+            d_value,
+            a1_value,
+            content_string,
+            ts,
         )
         xor_result = xhshow_client.crypto_processor.bit_ops.xor_transform_array(payload_array)
         config = xhshow_client.config

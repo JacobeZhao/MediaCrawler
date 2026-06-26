@@ -22,7 +22,7 @@ from httpx import RequestError
 
 
 class DataFetchError(RequestError):
-    """something error when fetch"""
+    """Error raised when fetching remote data fails."""
 
 
 class IPBlockError(RequestError):

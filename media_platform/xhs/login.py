@@ -29,7 +29,7 @@ from tenacity import (RetryError, retry, retry_if_result, stop_after_attempt,
 
 import config
 from base.base_crawler import AbstractLogin
-from cache.cache_factory import CacheFactory
+from cache.local_cache import ExpiringLocalCache
 from tools import utils
 
 
@@ -94,7 +94,9 @@ class XiaoHongShuLogin(AbstractLogin):
         elif config.LOGIN_TYPE == "cookie":
             await self.login_by_cookies()
         else:
-            raise ValueError("[XiaoHongShuLogin.begin]I nvalid Login Type Currently only supported qrcode or phone or cookies ...")
+            raise ValueError(
+                "[XiaoHongShuLogin.begin] Invalid login type; supported types are qrcode, phone, or cookie."
+            )
 
     async def login_by_mobile(self):
         """Login xiaohongshu by mobile"""
@@ -127,11 +129,11 @@ class XiaoHongShuLogin(AbstractLogin):
         await send_btn_ele.click()  # Click to send verification code
         sms_code_input_ele = await login_container_ele.query_selector("label.auth-code > input")
         submit_btn_ele = await login_container_ele.query_selector("div.input-container > button")
-        cache_client = CacheFactory.create_cache(config.CACHE_TYPE_MEMORY)
+        cache_client = ExpiringLocalCache()
         max_get_sms_code_time = 60 * 2  # Maximum time to get verification code is 2 minutes
         no_logged_in_session = ""
         while max_get_sms_code_time > 0:
-            utils.logger.info(f"[XiaoHongShuLogin.login_by_mobile] get sms code from redis remaining time {max_get_sms_code_time}s ...")
+            utils.logger.info(f"[XiaoHongShuLogin.login_by_mobile] waiting for SMS code, remaining time {max_get_sms_code_time}s ...")
             await asyncio.sleep(1)
             sms_code_key = f"xhs_{self.login_phone}"
             sms_code_value = cache_client.get(sms_code_key)

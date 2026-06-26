@@ -30,7 +30,7 @@ import re
 import urllib
 import urllib.parse
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 from PIL import Image, ImageDraw, ImageShow
@@ -184,32 +184,6 @@ def match_interact_info_count(count_str: str) -> int:
         return int(number)
     else:
         return 0
-
-
-def format_proxy_info(ip_proxy_info) -> Tuple[Optional[Dict], Optional[str]]:
-    """format proxy info for playwright and httpx"""
-    # fix circular import issue
-    from proxy.proxy_ip_pool import IpInfoModel
-    ip_proxy_info = cast(IpInfoModel, ip_proxy_info)
-
-    # Playwright proxy server should be in format "host:port" without protocol prefix
-    server = f"{ip_proxy_info.ip}:{ip_proxy_info.port}"
-    
-    playwright_proxy = {
-        "server": server,
-    }
-    
-    # Only add username and password if they are not empty
-    if ip_proxy_info.user and ip_proxy_info.password:
-        playwright_proxy["username"] = ip_proxy_info.user
-        playwright_proxy["password"] = ip_proxy_info.password
-    
-    # httpx 0.28.1 requires passing proxy URL string directly, not a dictionary
-    if ip_proxy_info.user and ip_proxy_info.password:
-        httpx_proxy = f"http://{ip_proxy_info.user}:{ip_proxy_info.password}@{ip_proxy_info.ip}:{ip_proxy_info.port}"
-    else:
-        httpx_proxy = f"http://{ip_proxy_info.ip}:{ip_proxy_info.port}"
-    return playwright_proxy, httpx_proxy
 
 
 def extract_text_from_html(html: str) -> str:

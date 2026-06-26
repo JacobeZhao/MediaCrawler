@@ -93,24 +93,21 @@ class AbstractStore(ABC):
     async def store_comment(self, comment_item: Dict):
         pass
 
-    # TODO support all platform
-    # only xhs is supported, so @abstractmethod is commented
+    # Legacy multi-platform interface retained for XHS-compatible imports.
     @abstractmethod
     async def store_creator(self, creator: Dict):
         pass
 
 
 class AbstractStoreImage(ABC):
-    # TODO: support all platform
-    # only weibo is supported
+    # Legacy media hook retained for upstream-compatible imports.
     # @abstractmethod
     async def store_image(self, image_content_item: Dict):
         pass
 
 
 class AbstractStoreVideo(ABC):
-    # TODO: support all platform
-    # only weibo is supported
+    # Legacy media hook retained for upstream-compatible imports.
     # @abstractmethod
     async def store_video(self, video_content_item: Dict):
         pass

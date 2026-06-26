@@ -22,11 +22,10 @@ import argparse
 import logging
 
 from .crawler_util import *
-from .slider_util import *
 from .time_util import *
 
 
-def init_loging_config():
+def init_logging_config():
     level = logging.INFO
     logging.basicConfig(
         level=level,
@@ -42,7 +41,12 @@ def init_loging_config():
     return _logger
 
 
-logger = init_loging_config()
+def init_loging_config():
+    """Backward-compatible alias for the historical misspelled function name."""
+    return init_logging_config()
+
+
+logger = init_logging_config()
 
 def str2bool(v):
     if isinstance(v, bool):
