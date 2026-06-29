@@ -4,6 +4,7 @@ Async task queue: processes XHS crawl jobs one at a time.
 """
 import asyncio
 import json
+import random
 import socket
 import uuid
 from datetime import datetime
@@ -13,6 +14,7 @@ from config.settings import settings
 from . import service_db as db
 from .circuit_breaker import circuit_breaker
 from .crawler_engine import CaptchaException, _is_recoverable_account_error
+from .rate_limiter import rate_limiter
 
 if TYPE_CHECKING:
     from .account_pool import AccountPool
@@ -195,6 +197,14 @@ class TaskManager:
                 message=msg,
             )
 
+        await self._protective_sleep(
+            task_id,
+            "startup_jitter",
+            "account protection startup delay",
+            settings.crawler_task_start_jitter_min_sec,
+            settings.crawler_task_start_jitter_max_sec,
+        )
+
         max_retries = min(
             max(self._pool.pool_size() + 1, 3),
             max(1, settings.task_max_account_switches + 1),
@@ -272,10 +282,16 @@ class TaskManager:
                 if task["task_type"] == db.TaskType.SEARCH.value:
                     result = await eng.search_keyword(
                         keyword=params["keyword"],
-                        max_notes=params.get("max_notes", 20),
+                        max_notes=self._clamp_positive(
+                            params.get("max_notes", 20),
+                            settings.crawler_task_max_notes_per_task,
+                        ),
                         enable_comments=True,
                         enable_images=False,
-                        max_comments=params.get("max_comments", 20),
+                        max_comments=self._clamp_positive(
+                            params.get("max_comments", 20),
+                            settings.crawler_task_max_comments_per_note,
+                        ),
                         progress_cb=progress_cb,
                         force=params.get("force", False),
                         sort_type=params.get("sort_type", "popularity_descending"),
@@ -284,7 +300,10 @@ class TaskManager:
                 elif task["task_type"] == db.TaskType.CREATOR.value:
                     result = await eng.crawl_creator(
                         creator_input=params["creator_input"],
-                        max_notes=params.get("max_notes", 20),
+                        max_notes=self._clamp_positive(
+                            params.get("max_notes", 20),
+                            settings.crawler_task_max_notes_per_task,
+                        ),
                         enable_images=True,
                         enable_comments=False,
                         max_comments=0,
@@ -344,6 +363,7 @@ class TaskManager:
                     else:
                         await self._pool.mark_temporarily_unavailable(eng)
                         event_type = "account_error"
+                    await rate_limiter.penalize(eng.account_id)
                     await circuit_breaker.record_risk_event(
                         event_type,
                         account_id=eng.account_id,
@@ -406,3 +426,37 @@ class TaskManager:
             lease_expires_at=None,
         )
         self._current_task_id = None
+
+    @staticmethod
+    def _clamp_positive(value: int, limit: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = limit
+        if limit <= 0:
+            return max(0, parsed)
+        return max(0, min(parsed, limit))
+
+    async def _protective_sleep(
+        self,
+        task_id: int,
+        stage: str,
+        message: str,
+        min_seconds: float,
+        max_seconds: float,
+    ) -> None:
+        if max_seconds <= 0 or max_seconds < min_seconds:
+            return
+        seconds = random.uniform(max(0.0, min_seconds), max_seconds)
+        if seconds <= 0:
+            return
+        progress = f"{message}: {int(seconds)}s"
+        await db.heartbeat_task(
+            task_id,
+            self._lease_owner,
+            lease_seconds=_LEASE_SECONDS + int(seconds) + 30,
+            progress=progress,
+            stage=stage,
+            message=progress,
+        )
+        await asyncio.sleep(seconds)

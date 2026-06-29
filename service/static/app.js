@@ -102,8 +102,12 @@
     const readyCount = state.accounts.filter(isAccountReady).length;
     const total = state.accounts.length;
     const serviceReady = state.status.status === "ready" || readyCount > 0;
+    const limiter = state.status.rate_limiter || {};
+    const penalties = Object.keys(limiter.active_penalties_sec || {}).length;
     $("servicePill").className = `pill ${serviceReady ? "ready" : "paused"}`;
     $("servicePill").textContent = serviceReady ? "服务可运行" : "等待账号";
+    $("protectionPill").className = `pill ${penalties ? "paused" : "ready"}`;
+    $("protectionPill").textContent = penalties ? `保护退避 ${penalties}` : "保护开启";
     $("queueSize").textContent = state.status.queue_size ?? 0;
     $("readyAccounts").textContent = readyCount;
     $("totalAccounts").textContent = total;
