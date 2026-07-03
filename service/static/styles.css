@@ -178,6 +178,7 @@
     .task-toolbar .task-keyword-filter { width: auto; min-width: 120px; flex: 1 1 180px; }
     .cookie-textarea { min-height: 150px; }
     .qr-modal-card { max-width: 420px; }
+    .candidate-modal-card { width: min(980px, 100%); }
     .col-id { width: 70px; }
     .col-status { width: 96px; }
     .col-note-progress { width: 190px; }
@@ -290,6 +291,39 @@
     }
     .account-panel .panel-body > .row.mt-md .btn { width: 100%; }
     .account-item { border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; background: #fff; }
+    .proxy-section {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 7px;
+      background: #fbfcfd;
+    }
+    .proxy-list {
+      display: grid;
+      gap: 6px;
+      max-height: 164px;
+      overflow: auto;
+    }
+    .proxy-item { border: 1px solid #edf0f3; border-radius: 6px; padding: 7px; background: #fff; }
+    .proxy-bind-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 6px;
+      align-items: center;
+    }
+    .small-select { min-height: 25px; padding: 3px 7px; font-size: 12px; }
+    .candidate-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .candidate-list { display: grid; gap: 8px; }
+    .candidate-item { border: 1px solid var(--line); border-radius: 7px; padding: 9px; background: #fff; }
+    .candidate-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .candidate-field { min-width: 0; border: 1px solid #edf0f3; border-radius: 6px; padding: 6px 7px; background: #fbfcfd; }
+    .candidate-field .value { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .candidate-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
     .empty {
       padding: 14px 10px;
@@ -317,6 +351,7 @@
     .hidden { display: none !important; }
     @media (max-width: 1180px) {
       .grid-overview { grid-template-columns: repeat(3, 1fr); }
+      .candidate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       html, body { overflow: auto; }
       .app { min-height: 100vh; height: auto; }
       .shell { min-height: auto; }
@@ -327,6 +362,7 @@
       .topbar-inner { align-items: flex-start; flex-direction: column; }
       .grid-overview { grid-template-columns: repeat(2, 1fr); }
       .account-summary, .form-grid { grid-template-columns: 1fr 1fr; }
+      .candidate-grid { grid-template-columns: 1fr; }
       th { top: 0; }
     }
 

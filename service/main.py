@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import service_db as sdb
 from .dependencies import IMAGE_DIR, STATIC_DIR, engine, pool, task_manager
-from .routes import accounts, export, login, notes, status, tasks
+from .routes import accounts, export, login, notes, proxies, status, tasks
 from .runtime_lock import RuntimeLock
 
 
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(status.router)
     app.include_router(login.router)
     app.include_router(accounts.router)
+    app.include_router(proxies.router)
     app.include_router(tasks.router)
     app.include_router(notes.router)
     app.include_router(export.router)

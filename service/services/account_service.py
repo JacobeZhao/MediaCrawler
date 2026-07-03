@@ -9,8 +9,26 @@ from fastapi import HTTPException
 from .. import service_db as sdb
 from ..account_pool import AccountPool
 from ..crawler_engine import XHSCrawlerEngine
-from ..schemas.accounts import AccountCookieRequest, AccountQrcodeStartRequest, AccountRequest
+from ..schemas.accounts import (
+    AccountCookieRequest,
+    AccountProxyRequest,
+    AccountQrcodeStartRequest,
+    AccountRequest,
+    CandidateAccountBulkRequest,
+)
 from ..task_manager import TaskManager
+from ..proxy_config import build_playwright_proxy
+
+
+async def _get_active_proxy_or_error(proxy_id: Optional[int], *, include_secret: bool = False):
+    if not proxy_id:
+        return None
+    proxy = await sdb.get_proxy_profile(proxy_id, include_secret=include_secret)
+    if not proxy:
+        raise HTTPException(404, "Proxy profile not found.")
+    if proxy.get("status") != "active":
+        raise HTTPException(400, "Proxy profile is inactive.")
+    return proxy
 
 
 class QrSessionService:
@@ -28,14 +46,19 @@ class QrSessionService:
         for sid in expired:
             await self.cancel(sid)
 
-    async def start(self, name: str) -> dict:
+    async def start(self, name: str, proxy_id: Optional[int] = None) -> dict:
         await self.cleanup_expired()
         if not name.strip():
             raise HTTPException(400, "Account name cannot be empty.")
 
         session_id = uuid.uuid4().hex[:10]
         temp_dir = os.path.join(self._root_dir, "browser_data", f"qr_session_{session_id}")
-        temp_engine = XHSCrawlerEngine(account_id=None, user_data_dir=temp_dir)
+        proxy_profile = await _get_active_proxy_or_error(proxy_id, include_secret=True)
+        temp_engine = XHSCrawlerEngine(
+            account_id=None,
+            user_data_dir=temp_dir,
+            proxy_config=build_playwright_proxy(proxy_profile),
+        )
         await temp_engine.start()
 
         result = await temp_engine.get_qrcode_for_web()
@@ -46,6 +69,7 @@ class QrSessionService:
         self._sessions[session_id] = {
             "engine": temp_engine,
             "name": name.strip(),
+            "proxy_id": proxy_id,
             "session_before": result["session_before"],
             "created_at": time.monotonic(),
         }
@@ -104,9 +128,15 @@ class AccountService:
             raise HTTPException(400, "Account name cannot be empty.")
         if not req.cookie.strip():
             raise HTTPException(400, "Cookie cannot be empty.")
+        await _get_active_proxy_or_error(req.proxy_id)
 
-        account_id = await sdb.add_account(req.name.strip(), req.cookie.strip())
-        ok = await self._pool.add_account(account_id, req.name.strip(), req.cookie.strip())
+        account_id = await sdb.add_account(req.name.strip(), req.cookie.strip(), req.proxy_id)
+        ok = await self._pool.add_account(
+            account_id,
+            req.name.strip(),
+            req.cookie.strip(),
+            req.proxy_id,
+        )
         if not ok:
             await sdb.delete_account(account_id)
             raise HTTPException(400, "Cookie is invalid or account startup failed.")
@@ -127,9 +157,9 @@ class AccountService:
         if not acc:
             raise HTTPException(404, "Account not found.")
         await self._pool.remove_account(account_id)
-        ok = await self._pool.add_account(account_id, acc["name"], req.cookie.strip())
+        ok = await self._pool.add_account(account_id, acc["name"], req.cookie.strip(), acc.get("proxy_id"))
         if not ok:
-            await self._pool.add_account(account_id, acc["name"], acc["cookie"])
+            await self._pool.add_account(account_id, acc["name"], acc["cookie"], acc.get("proxy_id"))
             raise HTTPException(400, "New cookie is invalid.")
         await sdb.update_account(account_id, cookie=req.cookie.strip(), status="active")
         await self._wake_paused_tasks()
@@ -140,7 +170,7 @@ class AccountService:
         return {"results": results, "message": f"Checked {len(results)} accounts."}
 
     async def start_qrcode(self, req: AccountQrcodeStartRequest):
-        return await self._qr_sessions.start(req.name)
+        return await self._qr_sessions.start(req.name, req.proxy_id)
 
     async def poll_qrcode(self, session_id: str):
         session = self._qr_sessions.get(session_id)
@@ -152,7 +182,8 @@ class AccountService:
             if not result.get("verified"):
                 raise HTTPException(400, result.get("error") or "QR login finished but account verification failed.")
             name = session["name"]
-            account_id = await sdb.add_account(name, cookie_str)
+            proxy_id = session.get("proxy_id")
+            account_id = await sdb.add_account(name, cookie_str, proxy_id)
             await self._pool.adopt_engine(account_id, eng)
             await sdb.update_account(account_id, status="active")
             self._qr_sessions.forget(session_id)
@@ -171,3 +202,42 @@ class AccountService:
     async def cancel_qrcode(self, session_id: str):
         await self._qr_sessions.cancel(session_id)
         return {"message": "QR session cancelled."}
+
+    async def list_candidate_accounts(self):
+        return await sdb.list_candidate_accounts()
+
+    async def save_candidate_accounts(self, req: CandidateAccountBulkRequest):
+        ids = []
+        for item in req.accounts:
+            data = item.model_dump()
+            data["phone"] = data.get("phone", "").strip()
+            data["user_id"] = data.get("user_id", "").strip()
+            if not data["phone"] and not data["user_id"]:
+                raise HTTPException(400, "Candidate account must include phone or user_id.")
+            ids.append(await sdb.upsert_candidate_account(data))
+        return {"candidate_ids": ids, "count": len(ids), "message": f"Saved {len(ids)} candidate accounts."}
+
+    async def delete_candidate_account(self, candidate_id: int):
+        await sdb.delete_candidate_account(candidate_id)
+        return {"message": "Candidate account deleted."}
+
+    async def update_account_proxy(self, account_id: int, req: AccountProxyRequest):
+        acc = await sdb.get_account(account_id)
+        if not acc:
+            raise HTTPException(404, "Account not found.")
+        await _get_active_proxy_or_error(req.proxy_id)
+        if req.restart:
+            await self._pool.remove_account(account_id)
+            ok = await self._pool.add_account(
+                account_id,
+                acc["name"],
+                acc["cookie"],
+                req.proxy_id,
+            )
+            if not ok:
+                await self._pool.add_account(account_id, acc["name"], acc["cookie"], acc.get("proxy_id"))
+                raise HTTPException(400, "Account failed to restart with the selected proxy.")
+        await sdb.update_account(account_id, proxy_id=req.proxy_id)
+        if req.restart:
+            await sdb.update_account(account_id, status="active")
+        return {"message": "Account proxy updated."}

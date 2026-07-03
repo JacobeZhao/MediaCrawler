@@ -3,6 +3,9 @@
     status: {},
     tasks: [],
     accounts: [],
+    candidates: [],
+    proxies: [],
+    proxyError: "",
     selectedTaskId: null,
     taskType: "search",
     taskMode: "single",
@@ -98,6 +101,44 @@
     return s === "ready" || s === "active";
   }
 
+  function activeProxies() {
+    return state.proxies.filter(proxy => proxy.status !== "inactive");
+  }
+
+  function proxyName(proxyId) {
+    if (!proxyId) return "未绑定代理";
+    const proxy = state.proxies.find(p => Number(p.id) === Number(proxyId));
+    return proxy ? `${proxy.name || `代理 ${proxy.id}`} (#${proxy.id})` : `代理 #${proxyId}`;
+  }
+
+  function proxyOptions(selectedId, allowEmptyLabel = "不使用代理") {
+    const selected = selectedId ? Number(selectedId) : "";
+    const emptySelected = selected === "" ? " selected" : "";
+    const options = activeProxies();
+    if (selected && !options.some(proxy => Number(proxy.id) === selected)) {
+      const current = state.proxies.find(proxy => Number(proxy.id) === selected);
+      options.unshift(current || { id: selected, name: `代理 ${selected}`, masked_url: "当前绑定" });
+    }
+    return [
+      `<option value=""${emptySelected}>${escapeHtml(allowEmptyLabel)}</option>`,
+      ...options.map(proxy => {
+        const isSelected = Number(proxy.id) === selected ? " selected" : "";
+        return `<option value="${proxy.id}"${isSelected}>${escapeHtml(proxy.name || `代理 ${proxy.id}`)} · ${escapeHtml(proxy.masked_url || proxy.server || "")}</option>`;
+      })
+    ].join("");
+  }
+
+  function candidateCookieReady(candidate) {
+    return Boolean(
+      candidate.has_web_session &&
+      candidate.has_a1 &&
+      candidate.has_web_id &&
+      candidate.has_gid &&
+      candidate.has_xsecappid &&
+      candidate.has_id_token
+    );
+  }
+
   function renderTop() {
     const readyCount = state.accounts.filter(isAccountReady).length;
     const total = state.accounts.length;
@@ -141,6 +182,7 @@
     $("aCaptcha").textContent = captcha;
     $("aBad").textContent = bad;
     $("aTotal").textContent = state.accounts.length;
+    renderProxies();
 
     if (!state.accounts.length) {
       $("accountList").innerHTML = `<div class="empty">暂无账号</div>`;
@@ -150,6 +192,8 @@
       const runtime = accountRuntime(account);
       const cls = isAccountReady(account) ? "ready" : (runtime === "captcha" ? "captcha" : statusClass(runtime));
       const msg = account.message ? `<div class="small-text warn-text mt-xxs">${escapeHtml(compact(account.message, 90))}</div>` : "";
+      const proxyText = account.proxy_name || proxyName(account.proxy_id);
+      const proxyServer = account.proxy_server ? ` · ${escapeHtml(account.proxy_server)}` : "";
       return `
         <div class="account-item">
           <div class="row-between">
@@ -158,10 +202,88 @@
           </div>
           <div class="small-text muted mono truncate mt-xs">${escapeHtml(account.cookie_preview || "")}</div>
           <div class="small-text muted mt-xs">ID ${account.id} · 验证码 ${account.captcha_count ?? 0} · 检查 ${fmt(account.last_checked)}</div>
+          <div class="small-text muted mt-xs truncate">代理：${escapeHtml(proxyText)}${proxyServer}</div>
           ${msg}
+          <div class="proxy-bind-row mt-sm">
+            <select class="select small-select" data-account-proxy-select="${account.id}">
+              ${proxyOptions(account.proxy_id)}
+            </select>
+            <button class="btn ghost small" data-proxy-save="${account.id}">绑定并重启</button>
+            <button class="btn ghost small" data-proxy-clear="${account.id}">解绑并重启</button>
+          </div>
           <div class="row mt-md">
             <button class="btn ghost small" data-cookie-id="${account.id}">替换 Cookie</button>
             <button class="btn danger small" data-delete-id="${account.id}">删除</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderProxies() {
+    if (!$("proxyList")) return;
+    $("proxyCount").textContent = state.proxies.length;
+    if (state.proxyError) {
+      $("proxyList").innerHTML = `<div class="empty">代理接口异常：${escapeHtml(state.proxyError)}</div>`;
+      return;
+    }
+    if (!state.proxies.length) {
+      $("proxyList").innerHTML = `<div class="empty">暂无代理配置</div>`;
+      return;
+    }
+    $("proxyList").innerHTML = state.proxies.map(proxy => {
+      const status = proxy.status || "active";
+      const cls = status === "active" ? "ready" : "paused";
+      const error = proxy.last_error ? `<div class="small-text warn-text mt-xxs truncate">${escapeHtml(compact(proxy.last_error, 90))}</div>` : "";
+      return `
+        <div class="proxy-item">
+          <div class="row-between">
+            <div class="truncate"><b>${escapeHtml(proxy.name || `代理 ${proxy.id}`)}</b></div>
+            <span class="pill ${cls}">${escapeHtml(status)}</span>
+          </div>
+          <div class="small-text muted mono truncate mt-xs">${escapeHtml(proxy.masked_url || proxy.server || "-")}</div>
+          <div class="small-text muted mt-xs">ID ${proxy.id} · ${escapeHtml(proxy.proxy_type || "http")} · 检测 ${fmt(proxy.last_checked)}</div>
+          ${error}
+          <div class="row mt-sm">
+            <button class="btn ghost small" data-proxy-check="${proxy.id}">检测代理</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderCandidates() {
+    if (!$("candidateList")) return;
+    if (!state.candidates.length) {
+      $("candidateList").innerHTML = `<div class="empty">暂无候选账号</div>`;
+      return;
+    }
+    $("candidateList").innerHTML = state.candidates.map(candidate => {
+      const ready = candidateCookieReady(candidate);
+      const cookieLabel = ready ? "网页 Cookie 完整" : "缺网页 Cookie";
+      const cookieClass = ready ? "ready" : "paused";
+      return `
+        <div class="candidate-item" data-candidate-id="${candidate.id}">
+          <div class="row-between">
+            <div class="truncate"><b>${escapeHtml(candidate.nickname || `候选账号 ${candidate.id}`)}</b></div>
+            <span class="pill ${cookieClass}">${cookieLabel}</span>
+          </div>
+          <div class="candidate-grid">
+            <div class="candidate-field"><div class="label">手机号</div><div class="value mono">${escapeHtml(candidate.phone || "-")}</div></div>
+            <div class="candidate-field"><div class="label">密码</div><div class="value mono">${escapeHtml(candidate.password || "-")}</div></div>
+            <div class="candidate-field"><div class="label">用户 ID</div><div class="value mono">${escapeHtml(candidate.user_id || "-")}</div></div>
+            <div class="candidate-field"><div class="label">注册日期</div><div class="value">${escapeHtml(candidate.registered_at || "-")}</div></div>
+            <div class="candidate-field"><div class="label">短信链接</div><div class="value">${candidate.sms_link ? "已保存" : "-"}</div></div>
+            <div class="candidate-field"><div class="label">辅助链接</div><div class="value">${candidate.fm_link ? "已保存" : "-"}</div></div>
+            <div class="candidate-field"><div class="label">Cookie 数</div><div class="value">${num(candidate.cookie_count || 0)}</div></div>
+            <div class="candidate-field"><div class="label">来源</div><div class="value">${escapeHtml(candidate.source || "-")}</div></div>
+          </div>
+          <div class="candidate-actions">
+            <button class="btn ghost small" data-candidate-copy="login" data-candidate-id="${candidate.id}">复制登录信息</button>
+            <button class="btn ghost small" data-candidate-copy="sms" data-candidate-id="${candidate.id}">复制短信链接</button>
+            <button class="btn ghost small" data-candidate-copy="fm" data-candidate-id="${candidate.id}">复制辅助链接</button>
+            <button class="btn ghost small" data-candidate-copy="cookie" data-candidate-id="${candidate.id}">复制候选 Cookie</button>
+            <button class="btn danger small" data-candidate-delete="${candidate.id}">删除</button>
           </div>
         </div>
       `;
@@ -229,7 +351,9 @@
     renderTop();
     renderMetrics();
     renderAccounts();
+    renderCandidates();
     renderTasks();
+    refreshProxySelects();
   }
 
   async function refreshAll() {
@@ -237,14 +361,21 @@
     state.refreshing = true;
     $("refreshBtn").disabled = true;
     try {
-      const [status, tasks, accounts] = await Promise.all([
+      const [status, tasks, accounts, candidates, proxiesResult] = await Promise.all([
         json("/api/status"),
         json("/api/tasks"),
         json("/api/accounts"),
+        json("/api/accounts/candidates"),
+        json("/api/proxies")
+          .then(proxies => ({ proxies, error: "" }))
+          .catch(error => ({ proxies: [], error: error.message || String(error) })),
       ]);
       state.status = status;
       state.tasks = tasks;
       state.accounts = accounts;
+      state.candidates = candidates;
+      state.proxies = Array.isArray(proxiesResult.proxies) ? proxiesResult.proxies : [];
+      state.proxyError = proxiesResult.error;
       $("apiError").classList.add("hidden");
       renderAll();
     } catch (error) {
@@ -291,8 +422,48 @@
     });
   }
 
+  function refreshProxySelects() {
+    if ($("cookieProxy")) $("cookieProxy").innerHTML = proxyOptions($("cookieProxy").value);
+    if ($("qrProxy")) $("qrProxy").innerHTML = proxyOptions($("qrProxy").value);
+  }
+
   function openModal(id) { $(id).classList.add("open"); }
   function closeModal(id) { $(id).classList.remove("open"); }
+
+  async function copyText(text) {
+    if (!text) return alert("没有可复制的内容");
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      input.focus();
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    }
+    alert("已复制");
+  }
+
+  function candidateCopyText(candidate, kind) {
+    if (kind === "login") {
+      return [
+        `手机号：${candidate.phone || ""}`,
+        `密码：${candidate.password || ""}`,
+        `昵称：${candidate.nickname || ""}`,
+        `用户ID：${candidate.user_id || ""}`,
+        `短信链接：${candidate.sms_link || ""}`,
+        `辅助链接：${candidate.fm_link || ""}`,
+      ].join("\n");
+    }
+    if (kind === "sms") return candidate.sms_link || "";
+    if (kind === "fm") return candidate.fm_link || "";
+    if (kind === "cookie") return candidate.cookie_json || "";
+    return "";
+  }
 
   async function closeQr() {
     if (state.qrTimer) clearInterval(state.qrTimer);
@@ -377,6 +548,8 @@
     $("accountList").addEventListener("click", async event => {
       const cookieBtn = event.target.closest("[data-cookie-id]");
       const deleteBtn = event.target.closest("[data-delete-id]");
+      const proxySaveBtn = event.target.closest("[data-proxy-save]");
+      const proxyClearBtn = event.target.closest("[data-proxy-clear]");
       if (cookieBtn) {
         const account = state.accounts.find(a => Number(a.id) === Number(cookieBtn.dataset.cookieId));
         state.cookieAccountId = account.id;
@@ -384,10 +557,89 @@
         $("accountName").value = account.name || "";
         $("accountName").disabled = true;
         $("accountCookie").value = "";
+        $("cookieProxy").value = account.proxy_id || "";
         openModal("cookieModal");
+      }
+      if (proxySaveBtn) {
+        const accountId = proxySaveBtn.dataset.proxySave;
+        const select = document.querySelector(`[data-account-proxy-select="${accountId}"]`);
+        const proxyId = select && select.value ? Number(select.value) : null;
+        await json(`/api/accounts/${accountId}/proxy`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ proxy_id: proxyId, restart: true }),
+        });
+        await refreshAll();
+      }
+      if (proxyClearBtn && confirm(`确认解绑账号 #${proxyClearBtn.dataset.proxyClear} 的代理并重启？`)) {
+        await json(`/api/accounts/${proxyClearBtn.dataset.proxyClear}/proxy`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({ proxy_id: null, restart: true }),
+        });
+        await refreshAll();
       }
       if (deleteBtn && confirm(`确认删除账号 #${deleteBtn.dataset.deleteId}？`)) {
         await json(`/api/accounts/${deleteBtn.dataset.deleteId}`, { method: "DELETE" });
+        await refreshAll();
+      }
+    });
+    $("proxyConfigBtn").addEventListener("click", () => openModal("proxyModal"));
+    $("addProxyBtn").addEventListener("click", () => openModal("proxyModal"));
+    $("proxyList").addEventListener("click", async event => {
+      const checkBtn = event.target.closest("[data-proxy-check]");
+      if (!checkBtn) return;
+      try {
+        const result = await json(`/api/proxies/${checkBtn.dataset.proxyCheck}/check`, { method: "POST" });
+        await refreshAll();
+        alert(`${result.message || "检测完成"}${result.observed_ip ? `\n出口 IP：${result.observed_ip}` : ""}${result.error ? `\n${result.error}` : ""}`);
+      } catch (error) {
+        alert(`检测失败：${error.message || error}`);
+      }
+    });
+    $("saveProxyBtn").addEventListener("click", async () => {
+      const name = $("proxyName").value.trim();
+      const server = $("proxyServer").value.trim();
+      if (!name) return alert("请填写代理名称");
+      if (!server) return alert("请填写代理服务器");
+      try {
+        await json("/api/proxies", {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify({
+            name,
+            proxy_type: $("proxyType").value,
+            server,
+            username: $("proxyUsername").value.trim(),
+            password: $("proxyPassword").value,
+            status: $("proxyStatus").value,
+          }),
+        });
+        $("proxyName").value = "";
+        $("proxyServer").value = "";
+        $("proxyUsername").value = "";
+        $("proxyPassword").value = "";
+        closeModal("proxyModal");
+        await refreshAll();
+      } catch (error) {
+        alert(`保存代理失败：${error.message || error}`);
+      }
+    });
+    $("candidateBtn").addEventListener("click", async () => {
+      await refreshAll();
+      openModal("candidateModal");
+    });
+    $("reloadCandidatesBtn").addEventListener("click", refreshAll);
+    $("candidateList").addEventListener("click", async event => {
+      const copyBtn = event.target.closest("[data-candidate-copy]");
+      const deleteBtn = event.target.closest("[data-candidate-delete]");
+      if (copyBtn) {
+        const candidate = state.candidates.find(c => Number(c.id) === Number(copyBtn.dataset.candidateId));
+        if (!candidate) return;
+        await copyText(candidateCopyText(candidate, copyBtn.dataset.candidateCopy));
+      }
+      if (deleteBtn && confirm(`确认删除候选账号 #${deleteBtn.dataset.candidateDelete}？`)) {
+        await json(`/api/accounts/candidates/${deleteBtn.dataset.candidateDelete}`, { method: "DELETE" });
         await refreshAll();
       }
     });
@@ -397,6 +649,7 @@
       $("accountName").disabled = false;
       $("accountName").value = "";
       $("accountCookie").value = "";
+      $("cookieProxy").value = "";
       openModal("cookieModal");
     });
     $("saveCookieBtn").addEventListener("click", async () => {
@@ -404,11 +657,13 @@
       const name = $("accountName").value.trim();
       if (!cookie) return alert("请粘贴 Cookie");
       try {
+        const proxy_id = $("cookieProxy").value ? Number($("cookieProxy").value) : null;
         if (state.cookieAccountId) {
           await json(`/api/accounts/${state.cookieAccountId}/cookie`, { method: "POST", headers: headers(), body: JSON.stringify({ cookie }) });
+          await json(`/api/accounts/${state.cookieAccountId}/proxy`, { method: "POST", headers: headers(), body: JSON.stringify({ proxy_id, restart: true }) });
         } else {
           if (!name) return alert("请填写账号备注");
-          await json("/api/accounts", { method: "POST", headers: headers(), body: JSON.stringify({ name, cookie }) });
+          await json("/api/accounts", { method: "POST", headers: headers(), body: JSON.stringify({ name, cookie, proxy_id }) });
         }
         closeModal("cookieModal");
         await refreshAll();
@@ -430,7 +685,8 @@
       try {
         $("qrMessage").textContent = "正在启动浏览器并生成二维码...";
         const name = $("qrAccountName").value.trim() || `account-${Date.now()}`;
-        const result = await json("/api/accounts/qrcode/start", { method: "POST", headers: headers(), body: JSON.stringify({ name }) });
+        const proxy_id = $("qrProxy").value ? Number($("qrProxy").value) : null;
+        const result = await json("/api/accounts/qrcode/start", { method: "POST", headers: headers(), body: JSON.stringify({ name, proxy_id }) });
         state.qrSessionId = result.session_id;
         $("qrImage").src = result.qrcode;
         $("qrImage").classList.remove("hidden");
@@ -516,6 +772,7 @@
 
   bindEvents();
   renderTaskForm();
+  refreshProxySelects();
   refreshAll();
   setInterval(refreshAll, 10000);
 })();

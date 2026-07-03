@@ -80,6 +80,7 @@ class XiaoHongShuClient(AbstractApiClient):
         headers: Dict[str, str],
         playwright_page: Page,
         cookie_dict: Dict[str, str],
+        proxy_url: Optional[str] = None,
     ):
         self.timeout = timeout
         self.headers = headers
@@ -97,6 +98,7 @@ class XiaoHongShuClient(AbstractApiClient):
         self.NOTE_ABNORMAL_CODE = -510001
         self.playwright_page = playwright_page
         self.cookie_dict = cookie_dict
+        self.proxy_url = proxy_url
         self._extractor = XiaoHongShuExtractor()
 
     def _build_remote_error(
@@ -218,7 +220,8 @@ class XiaoHongShuClient(AbstractApiClient):
         response = None
         for attempt in range(3):
             try:
-                async with make_async_client() as client:
+                client_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
+                async with make_async_client(**client_kwargs) as client:
                     response = await client.request(method, url, timeout=self.timeout, **kwargs)
                 break
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
@@ -320,7 +323,8 @@ class XiaoHongShuClient(AbstractApiClient):
         )
 
     async def get_note_media(self, url: str) -> Union[bytes, None]:
-        async with make_async_client() as client:
+        client_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
+        async with make_async_client(**client_kwargs) as client:
             try:
                 response = await client.request("GET", url, timeout=self.timeout)
                 response.raise_for_status()
@@ -349,7 +353,8 @@ class XiaoHongShuClient(AbstractApiClient):
             return None
         uri = "/api/sns/web/v1/user/selfinfo"
         headers = await self._pre_headers(uri, params={})
-        async with make_async_client() as client:
+        client_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
+        async with make_async_client(**client_kwargs) as client:
             response = await client.get(f"{self._host}{uri}", headers=headers)
             if response.status_code == 200:
                 return response.json()

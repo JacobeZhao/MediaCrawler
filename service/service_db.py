@@ -59,6 +59,7 @@ _TASK_UPDATE_FIELDS = {
 _ACCOUNT_UPDATE_FIELDS = {
     "name",
     "cookie",
+    "proxy_id",
     "status",
     "captcha_count",
     "last_checked",
@@ -179,12 +180,51 @@ async def init_service_db():
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 name          TEXT NOT NULL,
                 cookie        TEXT NOT NULL,
+                proxy_id      INTEGER,
                 status        TEXT NOT NULL DEFAULT 'active',
                 captcha_count INTEGER DEFAULT 0,
                 last_checked  TEXT,
                 created_at    TEXT NOT NULL
             )
         """)
+        await _ensure_column(db, "accounts", "proxy_id", "INTEGER")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_accounts_proxy_id ON accounts(proxy_id)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS proxy_profiles (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT NOT NULL UNIQUE,
+                proxy_type   TEXT NOT NULL DEFAULT 'http',
+                server       TEXT NOT NULL,
+                username     TEXT,
+                password     TEXT,
+                status       TEXT NOT NULL DEFAULT 'active',
+                last_checked TEXT,
+                last_error   TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_proxy_profiles_status ON proxy_profiles(status)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS candidate_accounts (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                source        TEXT,
+                phone         TEXT,
+                sms_link      TEXT,
+                fm_link       TEXT,
+                user_id       TEXT,
+                nickname      TEXT,
+                password      TEXT,
+                registered_at TEXT,
+                cookie_json   TEXT,
+                note          TEXT,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            )
+        """)
+        await _ensure_column(db, "candidate_accounts", "note", "TEXT")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_candidate_accounts_phone ON candidate_accounts(phone)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_candidate_accounts_user_id ON candidate_accounts(user_id)")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS crawl_events (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +257,94 @@ async def get_all_note_tags() -> Dict:
         cursor = await db.execute("SELECT note_id, d_level, quality FROM note_tags")
         rows = await cursor.fetchall()
     return {r["note_id"]: {"d_level": r["d_level"], "quality": r["quality"]} for r in rows}
+
+
+def _candidate_cookie_summary(cookie_json: str) -> Dict:
+    names = []
+    if cookie_json:
+        try:
+            decoded = json.loads(cookie_json)
+            if isinstance(decoded, list):
+                names = [str(item.get("name", "")) for item in decoded if isinstance(item, dict)]
+        except json.JSONDecodeError:
+            names = []
+    return {
+        "cookie_count": len(names),
+        "has_web_session": "web_session" in names,
+        "has_a1": "a1" in names,
+        "has_web_id": "webId" in names,
+        "has_gid": "gid" in names,
+        "has_xsecappid": "xsecappid" in names,
+        "has_id_token": "id_token" in names,
+        "has_customer_sso": "customer-sso-sid" in names,
+    }
+
+
+def _decode_candidate_row(row) -> Dict:
+    item = dict(row)
+    item.update(_candidate_cookie_summary(item.get("cookie_json") or ""))
+    return item
+
+
+async def list_candidate_accounts() -> List[Dict]:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM candidate_accounts ORDER BY updated_at DESC, id DESC"
+        )
+        rows = await cursor.fetchall()
+    return [_decode_candidate_row(r) for r in rows]
+
+
+async def upsert_candidate_account(item: Dict) -> int:
+    now = _now()
+    phone = (item.get("phone") or "").strip()
+    user_id = (item.get("user_id") or "").strip()
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = None
+        if phone:
+            cur = await db.execute("SELECT id FROM candidate_accounts WHERE phone=? LIMIT 1", (phone,))
+            row = await cur.fetchone()
+        if not row and user_id:
+            cur = await db.execute("SELECT id FROM candidate_accounts WHERE user_id=? LIMIT 1", (user_id,))
+            row = await cur.fetchone()
+        values = (
+            item.get("source", ""),
+            phone,
+            item.get("sms_link", ""),
+            item.get("fm_link", ""),
+            user_id,
+            item.get("nickname", ""),
+            item.get("password", ""),
+            item.get("registered_at", ""),
+            item.get("cookie_json", ""),
+            item.get("note", ""),
+            now,
+        )
+        if row:
+            await db.execute(
+                "UPDATE candidate_accounts SET source=?, phone=?, sms_link=?, fm_link=?, user_id=?, "
+                "nickname=?, password=?, registered_at=?, cookie_json=?, note=?, updated_at=? WHERE id=?",
+                (*values, row["id"]),
+            )
+            candidate_id = row["id"]
+        else:
+            cur = await db.execute(
+                "INSERT INTO candidate_accounts "
+                "(source, phone, sms_link, fm_link, user_id, nickname, password, registered_at, "
+                "cookie_json, note, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (*values[:-1], now, now),
+            )
+            candidate_id = cur.lastrowid
+        await db.commit()
+        return candidate_id
+
+
+async def delete_candidate_account(candidate_id: int):
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        await db.execute("DELETE FROM candidate_accounts WHERE id=?", (candidate_id,))
+        await db.commit()
 
 
 async def create_task(task_type: TaskType | str, params: Dict, dedupe: bool = True) -> int:
@@ -593,11 +721,98 @@ async def enrich_tasks_with_crawl_counts(tasks: List[Dict]) -> List[Dict]:
     return tasks
 
 
-async def add_account(name: str, cookie: str) -> int:
+async def list_proxy_profiles(include_secret: bool = False) -> List[Dict]:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM proxy_profiles ORDER BY id")
+        rows = await cursor.fetchall()
+    profiles = [dict(r) for r in rows]
+    if not include_secret:
+        for profile in profiles:
+            if profile.get("password"):
+                profile["password"] = ""
+                profile["has_password"] = True
+            else:
+                profile["has_password"] = False
+    return profiles
+
+
+async def get_proxy_profile(proxy_id: Optional[int], include_secret: bool = True) -> Optional[Dict]:
+    if not proxy_id:
+        return None
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM proxy_profiles WHERE id=?", (proxy_id,))
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    profile = dict(row)
+    if not include_secret and profile.get("password"):
+        profile["password"] = ""
+        profile["has_password"] = True
+    elif not include_secret:
+        profile["has_password"] = False
+    return profile
+
+
+async def add_proxy_profile(item: Dict) -> int:
+    now = _now()
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        try:
+            cursor = await db.execute(
+                "INSERT INTO proxy_profiles "
+                "(name, proxy_type, server, username, password, status, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    item.get("name", "").strip(),
+                    item.get("proxy_type", "http"),
+                    item.get("server", "").strip(),
+                    item.get("username", "").strip(),
+                    item.get("password", ""),
+                    item.get("status", "active"),
+                    now,
+                    now,
+                ),
+            )
+        except aiosqlite.IntegrityError as exc:
+            raise ValueError("Proxy profile name already exists.") from exc
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def update_proxy_profile(proxy_id: int, **kwargs):
+    if not kwargs:
+        return
+    allowed = {"name", "proxy_type", "server", "username", "password", "status", "last_checked", "last_error"}
+    unknown = set(kwargs) - allowed
+    if unknown:
+        raise ValueError(f"Unknown proxy fields: {sorted(unknown)}")
+    kwargs["updated_at"] = _now()
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        fields = [f"{k}=?" for k in kwargs]
+        values = list(kwargs.values()) + [proxy_id]
+        try:
+            await db.execute(f"UPDATE proxy_profiles SET {', '.join(fields)} WHERE id=?", values)
+        except aiosqlite.IntegrityError as exc:
+            raise ValueError("Proxy profile name already exists.") from exc
+        await db.commit()
+
+
+async def delete_proxy_profile(proxy_id: int):
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM accounts WHERE proxy_id=?", (proxy_id,))
+        row = await cursor.fetchone()
+        if row and row[0] > 0:
+            raise ValueError("Proxy profile is still bound to accounts.")
+        await db.execute("DELETE FROM proxy_profiles WHERE id=?", (proxy_id,))
+        await db.commit()
+
+
+async def add_account(name: str, cookie: str, proxy_id: Optional[int] = None) -> int:
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO accounts (name, cookie, status, created_at) VALUES (?,?,?,?)",
-            (name, cookie, AccountStatus.ACTIVE.value, _now()),
+            "INSERT INTO accounts (name, cookie, proxy_id, status, created_at) VALUES (?,?,?,?,?)",
+            (name, cookie, proxy_id, AccountStatus.ACTIVE.value, _now()),
         )
         await db.commit()
         return cursor.lastrowid

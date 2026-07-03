@@ -7,6 +7,7 @@ from .crawler_engine import XHSCrawlerEngine
 from .services.account_service import AccountService, QrSessionService
 from .services.export_service import ExportService
 from .services.note_service import NoteQueryService
+from .services.proxy_service import ProxyService
 from .services.task_service import TaskService
 from .task_manager import TaskManager
 
@@ -27,6 +28,7 @@ account_service = AccountService(pool, qr_sessions, task_manager)
 task_service = TaskService(engine, task_manager)
 note_query_service = NoteQueryService(IMAGE_DIR)
 export_service = ExportService(IMAGE_DIR)
+proxy_service = ProxyService()
 
 
 def get_engine() -> XHSCrawlerEngine:
@@ -55,3 +57,7 @@ def get_note_query_service() -> NoteQueryService:
 
 def get_export_service() -> ExportService:
     return export_service
+
+
+def get_proxy_service() -> ProxyService:
+    return proxy_service

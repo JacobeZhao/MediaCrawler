@@ -14,6 +14,7 @@ from tools import utils
 from config.settings import settings
 from . import service_db as sdb
 from .crawler_engine import XHSCrawlerEngine
+from .proxy_config import build_playwright_proxy, mask_proxy_url
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
@@ -89,7 +90,7 @@ class AccountPool:
     async def start(self):
         accounts = await sdb.get_active_accounts()
         for acc in accounts:
-            await self._start_engine(acc["id"], acc["name"], acc["cookie"])
+            await self._start_engine(acc["id"], acc["name"], acc["cookie"], acc.get("proxy_id"))
         self._rebuild_engine_list()
         self._rotation_task = asyncio.create_task(
             self._rotation_loop(), name="account-rotation"
@@ -165,8 +166,14 @@ class AccountPool:
             f"cooling down for {duration}s"
         )
 
-    async def add_account(self, account_id: int, name: str, cookie: str) -> bool:
-        ok = await self._start_engine(account_id, name, cookie)
+    async def add_account(
+        self,
+        account_id: int,
+        name: str,
+        cookie: str,
+        proxy_id: Optional[int] = None,
+    ) -> bool:
+        ok = await self._start_engine(account_id, name, cookie, proxy_id)
         if ok:
             self._rebuild_engine_list()
         return ok
@@ -254,9 +261,14 @@ class AccountPool:
             eng = self._pool.get(acc["id"])
             runtime_status = eng.status if eng else acc["status"]
             cookie_preview = _cookie_preview(acc["cookie"])
+            proxy_profile = await sdb.get_proxy_profile(acc.get("proxy_id"), include_secret=False)
             out.append({
                 "id": acc["id"],
                 "name": acc["name"],
+                "proxy_id": acc.get("proxy_id"),
+                "proxy_name": proxy_profile.get("name") if proxy_profile else "",
+                "proxy_server": mask_proxy_url(proxy_profile),
+                "proxy_status": proxy_profile.get("status") if proxy_profile else "",
                 "status": acc["status"],
                 "runtime_status": runtime_status,
                 "captcha_count": acc["captcha_count"],
@@ -339,10 +351,32 @@ class AccountPool:
         duration = settings.account_cooldown_base_sec * (2 ** max(0, failures - 1))
         return int(min(duration, settings.account_cooldown_max_sec))
 
-    async def _start_engine(self, account_id: int, name: str, cookie: str) -> bool:
+    async def _start_engine(
+        self,
+        account_id: int,
+        name: str,
+        cookie: str,
+        proxy_id: Optional[int] = None,
+    ) -> bool:
         user_data_dir = os.path.join(_PROJECT_ROOT, "browser_data", f"account_{account_id}")
         os.makedirs(user_data_dir, exist_ok=True)
-        eng = XHSCrawlerEngine(account_id=account_id, user_data_dir=user_data_dir)
+        proxy_profile = await sdb.get_proxy_profile(proxy_id, include_secret=True)
+        if proxy_id and not proxy_profile:
+            utils.logger.warning(
+                f"[AccountPool] account_id={account_id} proxy_id={proxy_id} not found; skip engine startup"
+            )
+            return False
+        if proxy_profile and proxy_profile.get("status") != "active":
+            utils.logger.warning(
+                f"[AccountPool] account_id={account_id} proxy_id={proxy_id} inactive; skip engine startup"
+            )
+            return False
+        proxy_config = build_playwright_proxy(proxy_profile)
+        eng = XHSCrawlerEngine(
+            account_id=account_id,
+            user_data_dir=user_data_dir,
+            proxy_config=proxy_config,
+        )
         try:
             await eng.start()
             ok = await eng.set_cookie(cookie)

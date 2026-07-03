@@ -44,7 +44,11 @@
             <h2 class="panel-title">账号池</h2>
             <div class="panel-note">账号状态会直接影响队列是否继续执行</div>
           </div>
-          <button class="btn primary small" id="healthBtn">健康检查</button>
+          <div class="row">
+            <button class="btn ghost small" id="candidateBtn">候选账号</button>
+            <button class="btn ghost small" id="proxyConfigBtn">代理配置</button>
+            <button class="btn primary small" id="healthBtn">健康检查</button>
+          </div>
         </div>
         <div class="panel-body">
           <div class="account-summary">
@@ -52,6 +56,16 @@
             <div class="mini-stat"><span class="small-text muted">验证码</span><b id="aCaptcha">0</b></div>
             <div class="mini-stat"><span class="small-text muted">异常</span><b id="aBad">0</b></div>
             <div class="mini-stat"><span class="small-text muted">总数</span><b id="aTotal">0</b></div>
+          </div>
+          <div class="proxy-section mt-md">
+            <div class="row-between">
+              <div>
+                <div class="label">代理配置</div>
+                <div class="small-text muted">共 <b id="proxyCount">0</b> 个配置，密码不会展示</div>
+              </div>
+              <button class="btn ghost small" id="addProxyBtn">添加代理</button>
+            </div>
+            <div class="proxy-list mt-sm" id="proxyList"></div>
           </div>
           <div class="account-list" id="accountList"></div>
           <div class="row mt-md">
@@ -179,6 +193,44 @@
   </main>
 </div>
 
+<div class="modal" id="proxyModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <b>添加代理</b>
+      <button class="btn ghost small" data-close="proxyModal">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label class="label">代理名称</label><input class="input" id="proxyName" placeholder="例如：上海-1"></div>
+      <div class="form-grid mt-md">
+        <div class="field"><label class="label">类型</label><select class="select" id="proxyType"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></div>
+        <div class="field"><label class="label">状态</label><select class="select" id="proxyStatus"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+      </div>
+      <div class="field mt-md"><label class="label">服务器</label><input class="input" id="proxyServer" placeholder="host:port 或 http://host:port"></div>
+      <div class="form-grid mt-md">
+        <div class="field"><label class="label">用户名</label><input class="input" id="proxyUsername" autocomplete="off"></div>
+        <div class="field"><label class="label">密码</label><input class="input" id="proxyPassword" type="password" autocomplete="new-password"></div>
+      </div>
+      <button class="btn primary full-width mt-md" id="saveProxyBtn">保存代理</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="candidateModal">
+  <div class="modal-card candidate-modal-card">
+    <div class="modal-head">
+      <b>候选账号信息</b>
+      <button class="btn ghost small" data-close="candidateModal">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="candidate-tools">
+        <div class="muted small-text">这些账号只作为登录候选，不会自动加入爬虫账号池。</div>
+        <button class="btn ghost small" id="reloadCandidatesBtn">刷新候选</button>
+      </div>
+      <div class="candidate-list mt-md" id="candidateList"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="cookieModal">
   <div class="modal-card">
     <div class="modal-head">
@@ -187,6 +239,7 @@
     </div>
     <div class="modal-body">
       <div class="field"><label class="label">账号备注</label><input class="input" id="accountName" placeholder="例如：账号-1"></div>
+      <div class="field mt-md"><label class="label">代理</label><select class="select" id="cookieProxy"></select></div>
       <div class="field mt-md"><label class="label">Cookie</label><textarea class="textarea cookie-textarea" id="accountCookie"></textarea></div>
       <button class="btn primary full-width mt-md" id="saveCookieBtn">保存并验证</button>
     </div>
@@ -201,6 +254,7 @@
     </div>
     <div class="modal-body">
       <div class="field"><label class="label">账号备注</label><input class="input" id="qrAccountName" value="new-account"></div>
+      <div class="field mt-md"><label class="label">代理</label><select class="select" id="qrProxy"></select></div>
       <button class="btn primary full-width mt-md" id="startQrBtn">生成二维码</button>
       <img id="qrImage" class="qr-img hidden" alt="登录二维码">
       <div class="muted small-text text-center" id="qrMessage">生成后请扫码确认登录</div>

@@ -33,6 +33,7 @@ from media_platform.xhs.login import XiaoHongShuLogin
 from store import xhs as xhs_store
 from tools import utils
 from var import crawler_type_var, source_keyword_var
+from .proxy_config import build_proxy_url
 from .rate_limiter import rate_limiter
 
 
@@ -93,7 +94,12 @@ def _unwrap_retry_error(exc: Exception) -> Exception:
 class XHSCrawlerEngine:
     """Persistent browser + XHS API client, processes tasks sequentially."""
 
-    def __init__(self, account_id: Optional[int] = None, user_data_dir: Optional[str] = None):
+    def __init__(
+        self,
+        account_id: Optional[int] = None,
+        user_data_dir: Optional[str] = None,
+        proxy_config: Optional[Dict] = None,
+    ):
         self._playwright = None
         self._browser_context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
@@ -103,6 +109,8 @@ class XHSCrawlerEngine:
         self.message = ""
         self.account_id = account_id  # None = default account
         self._user_data_dir = user_data_dir  # None = use default path
+        self._proxy_config = proxy_config
+        self._proxy_url = build_proxy_url(proxy_config)
         self._index_url = "https://www.rednote.com" if config.XHS_INTERNATIONAL else "https://www.xiaohongshu.com"
         self._user_agent = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -350,13 +358,16 @@ class XHSCrawlerEngine:
         user_data_dir = self._user_data_dir or os.path.join(_PROJECT_ROOT, "browser_data", "xhs_user_data_dir")
         os.makedirs(user_data_dir, exist_ok=True)
         chromium = self._playwright.chromium
-        self._browser_context = await chromium.launch_persistent_context(
-            user_data_dir=user_data_dir,
-            accept_downloads=True,
-            headless=config.HEADLESS,
-            viewport={"width": 1920, "height": 1080},
-            user_agent=self._user_agent,
-        )
+        launch_kwargs = {
+            "user_data_dir": user_data_dir,
+            "accept_downloads": True,
+            "headless": config.HEADLESS,
+            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": self._user_agent,
+        }
+        if self._proxy_config:
+            launch_kwargs["proxy"] = self._proxy_config
+        self._browser_context = await chromium.launch_persistent_context(**launch_kwargs)
         stealth_path = os.path.join(_PROJECT_ROOT, "libs", "stealth.min.js")
         if os.path.exists(stealth_path):
             await self._browser_context.add_init_script(path=stealth_path)
@@ -391,6 +402,7 @@ class XHSCrawlerEngine:
             },
             playwright_page=self._page,
             cookie_dict=cookie_dict,
+            proxy_url=self._proxy_url,
         )
 
     async def _before_request(self, endpoint: str):
