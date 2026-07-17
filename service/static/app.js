@@ -9,6 +9,7 @@
     selectedTaskId: null,
     taskType: "search",
     taskMode: "single",
+    taskProvider: "local",
     cookieAccountId: null,
     qrSessionId: "",
     qrTimer: null,
@@ -80,6 +81,30 @@
     return task.task_type || "-";
   }
 
+  function taskProvider(task) {
+    return task.provider || parseParams(task).provider || "local";
+  }
+
+  function providerLabel(provider) {
+    return provider === "justoneapi" ? "JustOneAPI" : "本地爬虫";
+  }
+
+  function providerReason(reason) {
+    return {
+      no_ready_account: "无可用账号",
+      missing_token: "未配置 Token",
+      disabled: "未启用",
+      quota_exceeded: "额度已用尽",
+      daily_quota: "今日额度已用尽",
+      rate_limit: "请求频率受限",
+      credential: "凭证无效",
+      insufficient_balance: "余额不足",
+      token_limit: "Token 额度受限",
+      client_closed: "客户端已关闭",
+      crawler_engine_stopped: "本地引擎未启动",
+    }[reason] || reason || "不可用";
+  }
+
   function statusText(status) {
     return { pending: "等待中", running: "运行中", paused: "已暂停", completed: "完成", failed: "失败" }[status] || status || "-";
   }
@@ -142,17 +167,47 @@
   function renderTop() {
     const readyCount = state.accounts.filter(isAccountReady).length;
     const total = state.accounts.length;
-    const serviceReady = state.status.status === "ready" || readyCount > 0;
+    const providers = Object.values(state.status.providers || {});
+    const providerReady = providers.some(detail => (
+      detail === true || Boolean(detail && detail.ready === true)
+    ));
+    const serviceReady = state.status.status === "ready" || readyCount > 0 || providerReady;
     const limiter = state.status.rate_limiter || {};
     const penalties = Object.keys(limiter.active_penalties_sec || {}).length;
     $("servicePill").className = `pill ${serviceReady ? "ready" : "paused"}`;
-    $("servicePill").textContent = serviceReady ? "服务可运行" : "等待账号";
+    $("servicePill").textContent = serviceReady ? "服务可运行" : "等待可用来源";
     $("protectionPill").className = `pill ${penalties ? "paused" : "ready"}`;
     $("protectionPill").textContent = penalties ? `保护退避 ${penalties}` : "保护开启";
     $("queueSize").textContent = state.status.queue_size ?? 0;
     $("readyAccounts").textContent = readyCount;
     $("totalAccounts").textContent = total;
     $("lastRefresh").textContent = `刷新 ${new Date().toLocaleTimeString()}`;
+  }
+
+  function renderProviderPicker() {
+    const selected = state.taskProvider;
+    document.querySelectorAll("[data-task-provider]").forEach(tab => {
+      const active = tab.dataset.taskProvider === selected;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-checked", String(active));
+    });
+    $("justoneApiOptions").classList.toggle("hidden", selected !== "justoneapi");
+    document.querySelectorAll("[data-local-only]").forEach(field => {
+      field.classList.toggle("hidden", selected !== "local");
+    });
+
+    const providers = state.status.providers || {};
+    const detail = providers[selected];
+    const fallbackReady = selected === "local" && state.accounts.some(isAccountReady);
+    const ready = detail === undefined
+      ? fallbackReady
+      : (typeof detail === "boolean" ? detail : Boolean(detail && (
+        detail.ready === true || detail.readiness === true || ["ready", "ok"].includes(detail.status || detail.readiness)
+      )));
+    const statusKnown = detail !== undefined || selected === "local";
+    const pill = $("providerReadiness");
+    pill.className = `pill ${ready ? "ready" : (statusKnown ? "paused" : "neutral")}`;
+    pill.textContent = ready ? "可用" : (statusKnown ? providerReason(detail && (detail.reason || detail.message)) : "状态未知");
   }
 
   function renderMetrics() {
@@ -296,14 +351,14 @@
     return state.tasks.filter(task => {
       if (status && task.status !== status) return false;
       if (!keyword) return true;
-      return `${taskTitle(task)} ${task.progress || ""} ${task.error || ""}`.toLowerCase().includes(keyword);
+      return `${taskTitle(task)} ${providerLabel(taskProvider(task))} ${task.progress || ""} ${task.error || ""}`.toLowerCase().includes(keyword);
     });
   }
 
   function renderTasks() {
     const rows = filteredTasks();
     if (!rows.length) {
-      $("taskRows").innerHTML = `<tr><td colspan="7"><div class="empty">没有匹配的任务</div></td></tr>`;
+      $("taskRows").innerHTML = `<tr><td colspan="8"><div class="empty">没有匹配的任务</div></td></tr>`;
       return;
     }
     $("taskRows").innerHTML = rows.map(task => {
@@ -318,6 +373,7 @@
       const selected = Number(state.selectedTaskId) === Number(task.id) ? " selected" : "";
       const canRun = !["pending", "running"].includes(task.status) && task.task_type !== "note";
       const source = taskKeyword(task);
+      const provider = taskProvider(task);
       return `
         <tr class="task-row${selected}" data-task-id="${task.id}">
           <td class="mono muted">#${task.id}</td>
@@ -325,6 +381,7 @@
             <div class="truncate strong">${escapeHtml(taskTitle(task))}</div>
             <div class="small-text muted">${escapeHtml(task.task_type || "-")} · 创建 ${fmt(task.created_at)}</div>
           </td>
+          <td><span class="provider-badge ${provider === "justoneapi" ? "api" : "local"}">${providerLabel(provider)}</span></td>
           <td><span class="pill ${statusClass(task.status)}">${statusText(task.status)}</span></td>
           <td>
             <div><b>${num(notes)}</b>${target ? ` / ${num(target)}` : ""} 篇</div>
@@ -353,6 +410,7 @@
     renderAccounts();
     renderCandidates();
     renderTasks();
+    renderProviderPicker();
     refreshProxySelects();
   }
 
@@ -409,6 +467,27 @@
     return String(value || "").split(/\r?\n/).map(v => v.trim()).filter(Boolean);
   }
 
+  function providerPayload() {
+    const provider = state.taskProvider;
+    if (provider !== "justoneapi") return { provider };
+    const maxPages = Math.min(100, Math.max(1, Math.trunc(Number($("justoneMaxPages").value) || 3)));
+    const maxRequests = Math.min(1000, Math.max(1, Math.trunc(Number($("justoneMaxRequests").value) || 20)));
+    $("justoneMaxPages").value = maxPages;
+    $("justoneMaxRequests").value = maxRequests;
+    return {
+      provider,
+      provider_options: {
+        include_details: $("justoneIncludeDetails").checked,
+        include_comments: $("justoneIncludeComments").checked,
+        include_replies: $("justoneIncludeReplies").checked,
+        max_pages: maxPages,
+        max_requests: maxRequests,
+        note_type: $("justoneNoteType").value,
+        time_filter: $("justoneTimeFilter").value,
+      },
+    };
+  }
+
   function renderTaskForm() {
     const activeKey = `${state.taskType}-${state.taskMode}`;
     document.querySelectorAll("[data-task-type]").forEach(tab => {
@@ -417,6 +496,7 @@
     document.querySelectorAll("[data-task-mode]").forEach(tab => {
       tab.classList.toggle("active", tab.dataset.taskMode === state.taskMode);
     });
+    renderProviderPicker();
     document.querySelectorAll("[data-task-form]").forEach(form => {
       form.classList.toggle("hidden", form.dataset.taskForm !== activeKey);
     });
@@ -524,6 +604,17 @@
         state.taskMode = tab.dataset.taskMode;
         renderTaskForm();
       });
+    });
+    document.querySelectorAll("[data-task-provider]").forEach(tab => {
+      tab.addEventListener("click", () => {
+        state.taskProvider = tab.dataset.taskProvider;
+        renderTaskForm();
+      });
+    });
+    $("justoneIncludeComments").addEventListener("change", event => {
+      const enabled = event.target.checked;
+      $("justoneIncludeReplies").disabled = !enabled;
+      if (!enabled) $("justoneIncludeReplies").checked = false;
     });
     $("taskRows").addEventListener("click", async event => {
       const view = event.target.closest("[data-view-id]");
@@ -704,11 +795,12 @@
       event.preventDefault();
       const data = formData(event.target);
       await submitJson("/api/tasks/search", {
+        ...providerPayload(),
         keyword: data.keyword.trim(),
         max_notes: Number(data.max_notes),
         max_comments: Number(data.max_comments),
         sort_type: data.sort_type,
-        days_limit: Number(data.days_limit),
+        ...(state.taskProvider === "local" ? { days_limit: Number(data.days_limit) } : {}),
         force: Boolean(data.force),
       });
     });
@@ -718,17 +810,19 @@
       const keywords = lines(data.keywords);
       if (!keywords.length) return alert("请输入至少一个关键词");
       await submitJson("/api/tasks/batch_search", {
+        ...providerPayload(),
         keywords,
         max_notes: Number(data.max_notes),
         max_comments: Number(data.max_comments),
         sort_type: data.sort_type,
-        days_limit: Number(data.days_limit),
+        ...(state.taskProvider === "local" ? { days_limit: Number(data.days_limit) } : {}),
       });
     });
     $("creatorSingleForm").addEventListener("submit", async event => {
       event.preventDefault();
       const data = formData(event.target);
       await submitJson("/api/tasks/creator", {
+        ...providerPayload(),
         creator_input: data.creator_input.trim(),
         max_notes: Number(data.max_notes),
         force: Boolean(data.force),
@@ -740,6 +834,7 @@
       const creator_urls = lines(data.creator_urls);
       if (!creator_urls.length) return alert("请输入至少一个博主主页或用户 ID");
       await submitJson("/api/tasks/batch_creator", {
+        ...providerPayload(),
         creator_urls,
         max_notes: Number(data.max_notes),
       });
@@ -750,6 +845,7 @@
       const note_input = String(data.note_input || "").trim();
       if (!note_input) return alert("请输入笔记链接或 ID");
       await submitJson("/api/tasks/note", {
+        ...providerPayload(),
         notes: [{
           note_input,
           d_level: data.d_level,
@@ -766,7 +862,7 @@
         quality: data.quality,
       }));
       if (!notes.length) return alert("请输入至少一个笔记链接或 ID");
-      await submitJson("/api/tasks/note", { notes });
+      await submitJson("/api/tasks/note", { ...providerPayload(), notes });
     });
   }
 

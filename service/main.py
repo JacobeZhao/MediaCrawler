@@ -1,13 +1,27 @@
 import os
 from contextlib import asynccontextmanager
 
+from .runtime_env import load_root_env
+
+load_root_env()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from config.settings import settings
+from database.db_session import create_tables
+
 from . import service_db as sdb
-from .dependencies import IMAGE_DIR, STATIC_DIR, engine, pool, task_manager
+from .dependencies import (
+    IMAGE_DIR,
+    STATIC_DIR,
+    engine,
+    justoneapi_client,
+    pool,
+    task_manager,
+)
 from .routes import accounts, export, login, notes, proxies, status, tasks
 from .runtime_lock import RuntimeLock
 
@@ -17,14 +31,18 @@ async def lifespan(app: FastAPI):
     runtime_lock = RuntimeLock()
     runtime_lock.acquire()
     app.state.runtime_lock = runtime_lock
-    await sdb.init_service_db()
-    await engine.start()
-    await pool.start()
-    await task_manager.start()
     try:
+        await sdb.init_service_db()
+        os.makedirs(os.path.dirname(os.path.abspath(settings.sqlite_db_path)), exist_ok=True)
+        await create_tables("sqlite")
+        if settings.local_crawler_enabled:
+            await engine.start()
+            await pool.start()
+        await task_manager.start()
         yield
     finally:
         await task_manager.stop()
+        await justoneapi_client.aclose()
         await pool.stop()
         await engine.stop()
         runtime_lock.release()

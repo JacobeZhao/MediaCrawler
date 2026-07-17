@@ -10,6 +10,8 @@ import aiosqlite
 from config.settings import settings
 from config.db_config import SQLITE_DB_PATH
 
+from .providers.justoneapi.options import TASK_OPTION_DEFAULTS
+
 SERVICE_DB_PATH = settings.service_db_path
 
 
@@ -25,6 +27,11 @@ class TaskType(str, Enum):
     SEARCH = "search"
     CREATOR = "creator"
     NOTE = "note"
+
+
+class TaskProvider(str, Enum):
+    LOCAL = "local"
+    JUSTONEAPI = "justoneapi"
 
 
 class AccountStatus(str, Enum):
@@ -54,6 +61,11 @@ _TASK_UPDATE_FIELDS = {
     "lease_owner",
     "heartbeat_at",
     "lease_expires_at",
+    "checkpoint_json",
+    "result_data",
+    "retry_at",
+    "attempt_count",
+    "manual_resume_required",
 }
 
 _ACCOUNT_UPDATE_FIELDS = {
@@ -78,15 +90,66 @@ def _task_type_value(task_type: TaskType | str) -> str:
     return task_type.value if isinstance(task_type, TaskType) else task_type
 
 
+def _task_provider_value(provider: TaskProvider | str) -> str:
+    return provider.value if isinstance(provider, TaskProvider) else provider
+
+
 def _account_status_value(status: AccountStatus | str) -> str:
     return status.value if isinstance(status, AccountStatus) else status
 
 
-def task_dedupe_key(task_type: TaskType | str, params: Dict) -> str:
+def task_dedupe_key(
+    task_type: TaskType | str,
+    params: Dict,
+    provider: TaskProvider | str = TaskProvider.LOCAL,
+) -> str:
     """Stable key used to collapse duplicate active task submissions."""
     return (
-        f"{_task_type_value(task_type)}:"
+        f"{_task_provider_value(provider)}:{_task_type_value(task_type)}:"
         f"{json.dumps(params, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+    )
+
+
+def task_scope_key(
+    task_type: TaskType | str,
+    params: Dict,
+    provider: TaskProvider | str,
+) -> str:
+    task_type_value = _task_type_value(task_type)
+    provider_value = _task_provider_value(provider)
+    if provider_value == TaskProvider.LOCAL.value:
+        identity = {
+            "keyword": params.get("keyword"),
+            "creator_input": params.get("creator_input"),
+        }
+    else:
+        options = params.get("provider_options")
+        options = options if isinstance(options, dict) else {}
+        identity = {
+            "keyword": params.get("keyword"),
+            "creator_input": params.get("creator_input"),
+            "sort_type": params.get("sort_type"),
+            "include_details": options.get(
+                "include_details",
+                TASK_OPTION_DEFAULTS.include_details,
+            ),
+            "include_comments": options.get(
+                "include_comments",
+                TASK_OPTION_DEFAULTS.include_comments,
+            ),
+            "include_replies": options.get(
+                "include_replies",
+                TASK_OPTION_DEFAULTS.include_replies,
+            ),
+            "note_type": options.get("note_type", TASK_OPTION_DEFAULTS.note_type),
+            "time_filter": options.get(
+                "time_filter",
+                TASK_OPTION_DEFAULTS.time_filter,
+            ),
+        }
+    return (
+        f"{provider_value}:{task_type_value}:"
+        f"{json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
     )
 
 
@@ -112,14 +175,15 @@ def _encode_progress_data(
 
 def _decode_task_row(row) -> Dict:
     task = dict(row)
-    raw = task.get("progress_data")
-    if raw:
-        try:
-            task["progress_data"] = json.loads(raw)
-        except json.JSONDecodeError:
-            task["progress_data"] = None
-    else:
-        task["progress_data"] = None
+    for field in ("progress_data", "checkpoint_json", "result_data"):
+        raw = task.get(field)
+        if raw:
+            try:
+                task[field] = json.loads(raw)
+            except json.JSONDecodeError:
+                task[field] = None
+        else:
+            task[field] = None
     return task
 
 
@@ -144,6 +208,7 @@ async def init_service_db():
             CREATE TABLE IF NOT EXISTS tasks (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_type   TEXT    NOT NULL,
+                provider    TEXT    NOT NULL DEFAULT 'local',
                 params      TEXT    NOT NULL,
                 status      TEXT    NOT NULL DEFAULT 'pending',
                 created_at  TEXT    NOT NULL,
@@ -157,16 +222,85 @@ async def init_service_db():
                 task_key    TEXT,
                 lease_owner TEXT,
                 heartbeat_at TEXT,
-                lease_expires_at TEXT
+                lease_expires_at TEXT,
+                checkpoint_json TEXT,
+                result_data TEXT,
+                retry_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                manual_resume_required INTEGER NOT NULL DEFAULT 0
             )
         """)
+        await _ensure_column(db, "tasks", "provider", "TEXT NOT NULL DEFAULT 'local'")
         await _ensure_column(db, "tasks", "task_key", "TEXT")
         await _ensure_column(db, "tasks", "lease_owner", "TEXT")
         await _ensure_column(db, "tasks", "heartbeat_at", "TEXT")
         await _ensure_column(db, "tasks", "lease_expires_at", "TEXT")
         await _ensure_column(db, "tasks", "progress_data", "TEXT")
+        await _ensure_column(db, "tasks", "checkpoint_json", "TEXT")
+        await _ensure_column(db, "tasks", "result_data", "TEXT")
+        await _ensure_column(db, "tasks", "retry_at", "TEXT")
+        await _ensure_column(db, "tasks", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+        await _ensure_column(
+            db,
+            "tasks",
+            "manual_resume_required",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await db.execute(
+            "UPDATE tasks SET provider=? WHERE provider IS NULL OR provider=''",
+            (TaskProvider.LOCAL.value,),
+        )
+        await db.execute(
+            "UPDATE tasks SET task_key=provider || ':' || task_key "
+            "WHERE task_key IS NOT NULL "
+            "AND task_key NOT LIKE 'local:%' "
+            "AND task_key NOT LIKE 'justoneapi:%'"
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_task_key_status ON tasks(task_key, status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_provider_status_retry "
+            "ON tasks(provider, status, retry_at, created_at)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS provider_requests (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id       INTEGER NOT NULL,
+                provider      TEXT NOT NULL,
+                endpoint      TEXT NOT NULL,
+                request_id    TEXT,
+                http_status   INTEGER,
+                business_code INTEGER,
+                duration_ms   INTEGER,
+                attempt       INTEGER NOT NULL DEFAULT 1,
+                billed        INTEGER NOT NULL DEFAULT 0,
+                error_type    TEXT,
+                request_state TEXT NOT NULL DEFAULT 'completed',
+                outcome_unknown INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT NOT NULL
+            )
+        """)
+        await _ensure_column(db, "provider_requests", "error_type", "TEXT")
+        await _ensure_column(
+            db,
+            "provider_requests",
+            "request_state",
+            "TEXT NOT NULL DEFAULT 'completed'",
+        )
+        await _ensure_column(
+            db,
+            "provider_requests",
+            "outcome_unknown",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_provider_requests_task "
+            "ON provider_requests(task_id, created_at)"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_requests_request_id "
+            "ON provider_requests(provider, request_id) WHERE request_id IS NOT NULL"
+        )
         await db.execute("""
             CREATE TABLE IF NOT EXISTS note_tags (
                 note_id   TEXT PRIMARY KEY,
@@ -347,25 +481,43 @@ async def delete_candidate_account(candidate_id: int):
         await db.commit()
 
 
-async def create_task(task_type: TaskType | str, params: Dict, dedupe: bool = True) -> int:
+async def create_task(
+    task_type: TaskType | str,
+    params: Dict,
+    provider: TaskProvider | str = TaskProvider.LOCAL,
+    dedupe: bool = True,
+) -> int:
     task_type_value = _task_type_value(task_type)
-    task_key = task_dedupe_key(task_type_value, params)
+    provider_value = _task_provider_value(provider)
+    if provider_value not in {item.value for item in TaskProvider}:
+        raise ValueError(f"Unknown task provider: {provider_value}")
+    task_key = task_dedupe_key(task_type_value, params, provider_value)
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
         if dedupe:
             cursor = await db.execute(
-                "SELECT id FROM tasks WHERE task_type=? AND task_key=? AND status IN (?, ?, ?) "
+                "SELECT id FROM tasks WHERE provider=? AND task_type=? AND task_key=? "
+                "AND status IN (?, ?, ?) "
+                "AND NOT (status=? AND manual_resume_required=1) "
                 "ORDER BY created_at ASC LIMIT 1",
-                (task_type_value, task_key, *ACTIVE_TASK_STATUSES),
+                (
+                    provider_value,
+                    task_type_value,
+                    task_key,
+                    *ACTIVE_TASK_STATUSES,
+                    TaskStatus.PAUSED.value,
+                ),
             )
             row = await cursor.fetchone()
             if row:
                 await db.commit()
                 return row[0]
         cursor = await db.execute(
-            "INSERT INTO tasks (task_type, params, status, created_at, task_key) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (task_type, provider, params, status, created_at, task_key) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 task_type_value,
+                provider_value,
                 json.dumps(params, ensure_ascii=False),
                 TaskStatus.PENDING.value,
                 _now(),
@@ -396,7 +548,7 @@ async def update_task_status(task_id: int, status: TaskStatus | str, **kwargs):
 
 async def update_task_status_if_owned(
     task_id: int,
-    lease_owner: str,
+    expected_lease_owner: str,
     status: TaskStatus | str,
     **kwargs,
 ) -> bool:
@@ -409,7 +561,7 @@ async def update_task_status_if_owned(
         for k, v in kwargs.items():
             fields.append(f"{k} = ?")
             values.append(v)
-        values.extend([task_id, lease_owner])
+        values.extend([task_id, expected_lease_owner])
         cursor = await db.execute(
             f"UPDATE tasks SET {', '.join(fields)} WHERE id = ? AND lease_owner = ?",
             values,
@@ -424,9 +576,12 @@ async def claim_task(task_id: int, lease_owner: str, lease_seconds: int = 300) -
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         cursor = await db.execute(
             "UPDATE tasks SET status=?, started_at=COALESCE(started_at, ?), "
-            "lease_owner=?, heartbeat_at=?, lease_expires_at=? WHERE id=? AND "
+            "lease_owner=?, heartbeat_at=?, lease_expires_at=?, retry_at=NULL, "
+            "attempt_count=COALESCE(attempt_count, 0) + 1 WHERE id=? AND "
             "(status=? OR (status=? AND (lease_expires_at IS NULL OR lease_expires_at < ?)) "
-            "OR (status=? AND (lease_expires_at IS NULL OR lease_expires_at < ?)))",
+            "OR (status=? AND manual_resume_required=0 "
+            "AND (lease_expires_at IS NULL OR lease_expires_at < ?) "
+            "AND (retry_at IS NULL OR retry_at <= ?)))",
             (
                 TaskStatus.RUNNING.value,
                 now,
@@ -438,6 +593,7 @@ async def claim_task(task_id: int, lease_owner: str, lease_seconds: int = 300) -
                 TaskStatus.RUNNING.value,
                 now,
                 TaskStatus.PAUSED.value,
+                now,
                 now,
             ),
         )
@@ -489,6 +645,152 @@ async def heartbeat_task(
         return cursor.rowcount == 1
 
 
+async def update_task_checkpoint(
+    task_id: int,
+    lease_owner: str,
+    checkpoint: Dict,
+) -> bool:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE tasks SET checkpoint_json=?, heartbeat_at=? "
+            "WHERE id=? AND lease_owner=?",
+            (json.dumps(checkpoint, ensure_ascii=False), _now(), task_id, lease_owner),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def record_provider_request(
+    *,
+    task_id: int,
+    provider: TaskProvider | str,
+    endpoint: str,
+    request_id: Optional[str] = None,
+    http_status: Optional[int] = None,
+    business_code: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    attempt: int = 1,
+    billed: bool = False,
+    error_type: Optional[str] = None,
+    request_state: str = "completed",
+    outcome_unknown: bool = False,
+) -> int:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO provider_requests "
+            "(task_id, provider, endpoint, request_id, http_status, business_code, "
+            "duration_ms, attempt, billed, error_type, request_state, outcome_unknown, "
+            "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                task_id,
+                _task_provider_value(provider),
+                endpoint,
+                request_id,
+                http_status,
+                business_code,
+                duration_ms,
+                attempt,
+                1 if billed else 0,
+                error_type,
+                request_state,
+                1 if outcome_unknown else 0,
+                _now(),
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+
+
+async def complete_provider_request(
+    request_row_id: int,
+    *,
+    request_id: Optional[str] = None,
+    http_status: Optional[int] = None,
+    business_code: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    attempt: int = 1,
+    billed: bool = False,
+    error_type: Optional[str] = None,
+    outcome_unknown: bool = False,
+) -> bool:
+    request_state = "unknown" if outcome_unknown else "completed"
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE provider_requests SET request_id=?, http_status=?, business_code=?, "
+            "duration_ms=?, attempt=?, billed=?, error_type=?, request_state=?, "
+            "outcome_unknown=? WHERE id=?",
+            (
+                request_id,
+                http_status,
+                business_code,
+                duration_ms,
+                attempt,
+                1 if billed else 0,
+                error_type,
+                request_state,
+                1 if outcome_unknown else 0,
+                request_row_id,
+            ),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def list_provider_requests(task_id: int, limit: int = 200) -> List[Dict]:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM provider_requests WHERE task_id=? "
+            "ORDER BY created_at ASC LIMIT ?",
+            (task_id, limit),
+        )
+        rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def fail_expired_tasks_with_inflight_provider_requests() -> List[int]:
+    """Stop automatic replay when a sent provider request has no known outcome."""
+    now = _now()
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute(
+            "SELECT DISTINCT t.id FROM tasks t "
+            "JOIN provider_requests r ON r.task_id=t.id "
+            "WHERE r.request_state='inflight' AND t.status IN (?, ?, ?) "
+            "AND (t.lease_expires_at IS NULL OR t.lease_expires_at < ?)",
+            (*ACTIVE_TASK_STATUSES, now),
+        )
+        task_ids = [row["id"] for row in await cursor.fetchall()]
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            await db.execute(
+                f"UPDATE provider_requests SET request_state='unknown', "
+                f"outcome_unknown=1, error_type=COALESCE(error_type, 'ProcessInterrupted') "
+                f"WHERE request_state='inflight' AND task_id IN ({placeholders})",
+                task_ids,
+            )
+            message = (
+                "provider request outcome is unknown after process interruption; "
+                "manual confirmation is required before retry"
+            )
+            await db.execute(
+                f"UPDATE tasks SET status=?, completed_at=?, error=?, progress=?, "
+                f"progress_data=?, lease_owner=NULL, heartbeat_at=NULL, "
+                f"lease_expires_at=NULL WHERE id IN ({placeholders})",
+                (
+                    TaskStatus.FAILED.value,
+                    now,
+                    message,
+                    message,
+                    _encode_progress_data(stage="unknown_outcome", message=message),
+                    *task_ids,
+                ),
+            )
+        await db.commit()
+    return task_ids
+
+
 async def release_task_lease(task_id: int, lease_owner: str):
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         await db.execute(
@@ -506,20 +808,31 @@ async def get_task(task_id: int) -> Optional[Dict]:
         return _decode_task_row(row) if row else None
 
 
-async def reset_task_for_resume(task_id: int, new_params: Dict):
+async def reset_task_for_resume(
+    task_id: int,
+    new_params: Dict,
+    *,
+    clear_checkpoint: bool = False,
+):
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
-        cursor = await db.execute("SELECT task_type FROM tasks WHERE id=?", (task_id,))
+        cursor = await db.execute(
+            "SELECT task_type, provider FROM tasks WHERE id=?",
+            (task_id,),
+        )
         row = await cursor.fetchone()
         task_type = row[0] if row else TaskType.SEARCH.value
+        provider = row[1] if row else TaskProvider.LOCAL.value
         # Keep existing notes_count/comments_count so history is visible while pending.
+        checkpoint_assignment = ", checkpoint_json=NULL" if clear_checkpoint else ""
         await db.execute(
             "UPDATE tasks SET status=?, params=?, task_key=?, started_at=NULL, completed_at=NULL, "
-            "error=NULL, progress='resume queued', progress_data=?, lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
-            "WHERE id=?",
+            "error=NULL, progress='resume queued', progress_data=?, retry_at=NULL, "
+            "attempt_count=0, result_data=NULL, lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
+            f", manual_resume_required=0{checkpoint_assignment} WHERE id=?",
             (
                 TaskStatus.PENDING.value,
                 json.dumps(new_params, ensure_ascii=False),
-                task_dedupe_key(task_type, new_params),
+                task_dedupe_key(task_type, new_params, provider),
                 _encode_progress_data(stage="pending", message="resume queued"),
                 task_id,
             ),
@@ -527,89 +840,150 @@ async def reset_task_for_resume(task_id: int, new_params: Dict):
         await db.commit()
 
 
-async def requeue_unfinished_tasks() -> List[int]:
+async def requeue_unfinished_tasks(
+    provider: TaskProvider | str | None = None,
+) -> List[int]:
+    now = _now()
+    provider_value = _task_provider_value(provider) if provider is not None else None
+    provider_clause = " AND provider=?" if provider_value is not None else ""
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute(
             "UPDATE tasks SET status=?, started_at=NULL, progress='requeued', progress_data=?, "
-            "lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL WHERE status IN (?, ?)",
+            "lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
+            "WHERE ((status=? AND (lease_expires_at IS NULL OR lease_expires_at<?)) "
+            "OR (status=? AND manual_resume_required=0 "
+            "AND (retry_at IS NULL OR retry_at<=?)))"
+            f"{provider_clause}",
             (
                 TaskStatus.PENDING.value,
                 _encode_progress_data(stage="pending", message="requeued"),
                 TaskStatus.RUNNING.value,
+                now,
                 TaskStatus.PAUSED.value,
+                now,
+                *([provider_value] if provider_value is not None else []),
             ),
         )
         await db.commit()
         cursor = await db.execute(
-            "SELECT id FROM tasks WHERE status=? ORDER BY created_at ASC",
-            (TaskStatus.PENDING.value,),
+            f"SELECT id FROM tasks WHERE status=?{provider_clause} ORDER BY created_at ASC",
+            (
+                TaskStatus.PENDING.value,
+                *([provider_value] if provider_value is not None else []),
+            ),
         )
         rows = await cursor.fetchall()
     return [r["id"] for r in rows]
 
 
-async def pause_unfinished_tasks(progress: str = "waiting for account pool recovery") -> List[int]:
+async def pause_unfinished_tasks(
+    progress: str = "waiting for account pool recovery",
+    provider: TaskProvider | str | None = None,
+) -> List[int]:
     progress_data = _encode_progress_data(stage="paused", message=progress)
+    now = _now()
+    provider_value = _task_provider_value(provider) if provider is not None else None
+    provider_clause = " AND provider=?" if provider_value is not None else ""
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute(
             "UPDATE tasks SET status=?, progress=?, progress_data=?, "
             "lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
-            "WHERE status IN (?, ?, ?)",
+            "WHERE (status IN (?, ?) OR "
+            "(status=? AND (lease_expires_at IS NULL OR lease_expires_at<?)))"
+            f"{provider_clause}",
             (
                 TaskStatus.PAUSED.value,
                 progress,
                 progress_data,
                 TaskStatus.PENDING.value,
-                TaskStatus.RUNNING.value,
                 TaskStatus.PAUSED.value,
+                TaskStatus.RUNNING.value,
+                now,
+                *([provider_value] if provider_value is not None else []),
             ),
         )
         await db.commit()
         cursor = await db.execute(
-            "SELECT id FROM tasks WHERE status=? ORDER BY created_at ASC",
-            (TaskStatus.PAUSED.value,),
+            f"SELECT id FROM tasks WHERE status=?{provider_clause} ORDER BY created_at ASC",
+            (
+                TaskStatus.PAUSED.value,
+                *([provider_value] if provider_value is not None else []),
+            ),
         )
         rows = await cursor.fetchall()
     return [r["id"] for r in rows]
 
 
-async def list_paused_task_ids(limit: int = 100) -> List[int]:
+async def list_paused_task_ids(
+    limit: int = 100,
+    provider: TaskProvider | str | None = None,
+) -> List[int]:
+    provider_value = _task_provider_value(provider) if provider is not None else None
+    provider_clause = " AND provider=?" if provider_value is not None else ""
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id FROM tasks WHERE status=? AND lease_owner IS NULL ORDER BY created_at ASC LIMIT ?",
-            (TaskStatus.PAUSED.value, limit),
+            "SELECT id FROM tasks WHERE status=? AND lease_owner IS NULL "
+            "AND manual_resume_required=0 "
+            "AND (retry_at IS NULL OR retry_at<=?)"
+            f"{provider_clause} ORDER BY created_at ASC LIMIT ?",
+            (
+                TaskStatus.PAUSED.value,
+                _now(),
+                *([provider_value] if provider_value is not None else []),
+                limit,
+            ),
         )
         rows = await cursor.fetchall()
     return [r["id"] for r in rows]
 
 
-async def list_expired_running_task_ids(limit: int = 100) -> List[int]:
+async def list_expired_running_task_ids(
+    limit: int = 100,
+    provider: TaskProvider | str | None = None,
+) -> List[int]:
     now = _now()
+    provider_value = _task_provider_value(provider) if provider is not None else None
+    provider_clause = " AND provider=?" if provider_value is not None else ""
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT id FROM tasks WHERE status=? AND "
             "(lease_expires_at IS NULL OR lease_expires_at < ?) "
-            "ORDER BY created_at ASC LIMIT ?",
-            (TaskStatus.RUNNING.value, now, limit),
+            f"{provider_clause} ORDER BY created_at ASC LIMIT ?",
+            (
+                TaskStatus.RUNNING.value,
+                now,
+                *([provider_value] if provider_value is not None else []),
+                limit,
+            ),
         )
         rows = await cursor.fetchall()
     return [r["id"] for r in rows]
 
 
-async def pause_expired_running_tasks(progress: str = "waiting for account pool recovery") -> List[int]:
+async def pause_expired_running_tasks(
+    progress: str = "waiting for account pool recovery",
+    provider: TaskProvider | str | None = None,
+) -> List[int]:
     now = _now()
+    provider_value = _task_provider_value(provider) if provider is not None else None
+    provider_clause = " AND provider=?" if provider_value is not None else ""
     progress_data = _encode_progress_data(stage="paused", message=progress, updated_at=now)
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
             "SELECT id FROM tasks WHERE status=? AND "
             "(lease_expires_at IS NULL OR lease_expires_at < ?) "
-            "ORDER BY created_at ASC",
-            (TaskStatus.RUNNING.value, now),
+            f"{provider_clause} ORDER BY created_at ASC",
+            (
+                TaskStatus.RUNNING.value,
+                now,
+                *([provider_value] if provider_value is not None else []),
+            ),
         )
         rows = await cursor.fetchall()
         ids = [r["id"] for r in rows]
@@ -618,33 +992,75 @@ async def pause_expired_running_tasks(progress: str = "waiting for account pool 
             await db.execute(
                 f"UPDATE tasks SET status=?, progress=?, progress_data=?, "
                 "lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
-                f"WHERE id IN ({placeholders})",
-                (TaskStatus.PAUSED.value, progress, progress_data, *ids),
+                f"WHERE id IN ({placeholders}) AND status=? AND "
+                "(lease_expires_at IS NULL OR lease_expires_at < ?)",
+                (
+                    TaskStatus.PAUSED.value,
+                    progress,
+                    progress_data,
+                    *ids,
+                    TaskStatus.RUNNING.value,
+                    now,
+                ),
             )
-            await db.commit()
+        await db.commit()
     return ids
 
 
-async def find_latest_search_task(keyword: str) -> Optional[Dict]:
+async def find_latest_search_task(
+    keyword: str,
+    provider: TaskProvider | str = TaskProvider.LOCAL,
+    scope_params: Optional[Dict] = None,
+) -> Optional[Dict]:
+    provider_value = _task_provider_value(provider)
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM tasks WHERE task_type=? AND json_extract(params,'$.keyword')=? ORDER BY created_at DESC LIMIT 1",
-            (TaskType.SEARCH.value, keyword),
+            "SELECT * FROM tasks WHERE provider=? AND task_type=? "
+            "AND json_extract(params,'$.keyword')=? ORDER BY created_at DESC LIMIT 100",
+            (provider_value, TaskType.SEARCH.value, keyword),
         )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        rows = await cursor.fetchall()
+    expected_scope = (
+        task_scope_key(TaskType.SEARCH, scope_params, provider_value)
+        if scope_params is not None
+        else None
+    )
+    for row in rows:
+        task = _decode_task_row(row)
+        if expected_scope is None:
+            return task
+        if task_scope_key(TaskType.SEARCH, _task_params(task), provider_value) == expected_scope:
+            return task
+    return None
 
 
-async def find_latest_creator_task(creator_input: str) -> Optional[Dict]:
+async def find_latest_creator_task(
+    creator_input: str,
+    provider: TaskProvider | str = TaskProvider.LOCAL,
+    scope_params: Optional[Dict] = None,
+) -> Optional[Dict]:
+    provider_value = _task_provider_value(provider)
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM tasks WHERE task_type=? AND json_extract(params,'$.creator_input')=? ORDER BY created_at DESC LIMIT 1",
-            (TaskType.CREATOR.value, creator_input),
+            "SELECT * FROM tasks WHERE provider=? AND task_type=? "
+            "AND json_extract(params,'$.creator_input')=? ORDER BY created_at DESC LIMIT 100",
+            (provider_value, TaskType.CREATOR.value, creator_input),
         )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        rows = await cursor.fetchall()
+    expected_scope = (
+        task_scope_key(TaskType.CREATOR, scope_params, provider_value)
+        if scope_params is not None
+        else None
+    )
+    for row in rows:
+        task = _decode_task_row(row)
+        if expected_scope is None:
+            return task
+        if task_scope_key(TaskType.CREATOR, _task_params(task), provider_value) == expected_scope:
+            return task
+    return None
 
 
 async def list_tasks(limit: int = 100) -> List[Dict]:
@@ -673,7 +1089,30 @@ async def enrich_tasks_with_crawl_counts(tasks: List[Dict]) -> List[Dict]:
         return tasks
 
     async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='xhs_content_source'"
+        )
+        has_source_attribution = await cursor.fetchone() is not None
         for task in tasks:
+            provider = task.get("provider") or TaskProvider.LOCAL.value
+            if provider != TaskProvider.LOCAL.value and has_source_attribution:
+                cursor = await db.execute(
+                    "SELECT entity_type, COUNT(DISTINCT entity_id) "
+                    "FROM xhs_content_source WHERE provider=? AND task_id=? "
+                    "AND entity_type IN ('note', 'comment') GROUP BY entity_type",
+                    (provider, task["id"]),
+                )
+                attributed_counts = dict(await cursor.fetchall())
+                notes_count = attributed_counts.get("note", 0)
+                comments_count = attributed_counts.get("comment", 0)
+                task["notes_count"] = notes_count
+                task["comments_count"] = comments_count
+                progress_data = task.get("progress_data")
+                if isinstance(progress_data, dict):
+                    progress_data["notes_count"] = notes_count
+                    progress_data["comments_count"] = comments_count
+                continue
+
             params = _task_params(task)
             if task.get("task_type") == TaskType.SEARCH.value:
                 keyword = params.get("keyword")

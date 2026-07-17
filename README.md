@@ -26,16 +26,29 @@ Open:
 http://127.0.0.1:8088/
 ```
 
-Configuration priority is: CLI arguments > environment variables > defaults.
+Configuration priority is: CLI arguments > existing process environment >
+the root `.env` file > defaults. All supported Python launch paths load `.env`
+before application settings are created. Set `XHS_ENV_FILE` in the parent
+process to use another file; `XHS_ENV_FILE` entries inside an environment file
+are rejected to prevent chained loads.
 
 Useful health endpoints:
 
 - `GET /healthz`: process liveness.
-- `GET /readyz`: local service readiness.
+- `GET /readyz`: readiness by task provider.
 - `GET /version`: service version metadata.
-- `GET /api/status`: crawler engine and queue status.
+- `GET /api/status`: crawler engine plus provider readiness and queue status.
 
-The current deployment model is a single uvicorn process with one in-process task worker. Do not run multiple uvicorn workers unless the task queue, QR sessions, account pool, and browser state are externalized.
+The current deployment model is one uvicorn process with one in-process queue and
+worker per registered task provider. Do not run multiple uvicorn workers unless the
+task queues, QR sessions, account pool, browser state, and SQLite coordination are
+externalized.
+
+One-time `search`, `creator`, and `note` tasks accept `provider=local|justoneapi`.
+The default is `local`, so existing clients continue to use Playwright and the local
+account pool. `justoneapi` is an alternative outbound API execution path; it does not
+add monitoring, subscriptions, scheduling, or periodic jobs. See `docs/api.md` and
+`docs/config.md` before enabling it.
 
 ## Architecture
 
@@ -45,6 +58,7 @@ The FastAPI app is assembled in `service/main.py`; `service/app.py` is only the 
 - `service/schemas/`: request DTOs.
 - `service/services/`: application services for tasks, accounts, note queries, QR sessions, and export.
 - `service/service_db.py`: service database repository for tasks, accounts, tags, task lease, and heartbeat state.
+- `service/executors/`: provider-specific task executors and executor registry.
 - `service/crawler_engine.py`: XHS browser/client orchestration. This is still the highest-risk core and should be refactored gradually.
 
 The static frontend lives in `service/static/`: `index.html` for markup, `styles.css` for layout, and `app.js` for state, API calls, and rendering. API calls go through a single frontend helper and can be pointed at a separate backend by setting `window.__XHS_CONFIG__.apiBase` before the app initializes.

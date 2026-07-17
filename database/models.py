@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, Integer, String, Text
+from sqlalchemy import BigInteger, Column, Integer, String, Text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -8,7 +8,7 @@ class XhsCreator(Base):
     __tablename__ = "xhs_creator"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), index=True)
+    user_id = Column(String(255), index=True, unique=True)
     nickname = Column(Text)
     avatar = Column(Text)
     ip_location = Column(Text)
@@ -32,7 +32,7 @@ class XhsNote(Base):
     ip_location = Column(Text)
     add_ts = Column(BigInteger)
     last_modify_ts = Column(BigInteger)
-    note_id = Column(String(255), index=True)
+    note_id = Column(String(255), index=True, unique=True)
     type = Column(Text)
     title = Column(Text)
     desc = Column(Text)
@@ -60,7 +60,7 @@ class XhsNoteComment(Base):
     ip_location = Column(Text)
     add_ts = Column(BigInteger)
     last_modify_ts = Column(BigInteger)
-    comment_id = Column(String(255), index=True)
+    comment_id = Column(String(255), index=True, unique=True)
     create_time = Column(BigInteger, index=True)
     note_id = Column(String(255), index=True)
     content = Column(Text)
@@ -68,3 +68,26 @@ class XhsNoteComment(Base):
     pictures = Column(Text)
     parent_comment_id = Column(String(255))
     like_count = Column(Text)
+
+
+class XhsContentSource(Base):
+    __tablename__ = "xhs_content_source"
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_type",
+            "entity_id",
+            "provider",
+            "task_id",
+            "source_keyword",
+            name="uq_xhs_content_source_attribution",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    entity_type = Column(String(32), nullable=False, index=True)
+    entity_id = Column(String(255), nullable=False, index=True)
+    provider = Column(String(32), nullable=False)
+    task_id = Column(Integer, nullable=False, default=0, index=True)
+    source_keyword = Column(Text, nullable=False, default="")
+    first_seen_ts = Column(BigInteger, nullable=False)
+    last_seen_ts = Column(BigInteger, nullable=False)

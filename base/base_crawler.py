@@ -86,16 +86,37 @@ class AbstractLogin(ABC):
 class AbstractStore(ABC):
 
     @abstractmethod
-    async def store_content(self, content_item: Dict):
+    async def store_content(
+        self,
+        content_item: Dict,
+        *,
+        provider: str = "local",
+        task_id: Optional[int] = None,
+        source_keyword: Optional[str] = None,
+    ):
         pass
 
     @abstractmethod
-    async def store_comment(self, comment_item: Dict):
+    async def store_comment(
+        self,
+        comment_item: Dict,
+        *,
+        provider: str = "local",
+        task_id: Optional[int] = None,
+        source_keyword: Optional[str] = None,
+    ):
         pass
 
     # Legacy multi-platform interface retained for XHS-compatible imports.
     @abstractmethod
-    async def store_creator(self, creator: Dict):
+    async def store_creator(
+        self,
+        creator: Dict,
+        *,
+        provider: str = "local",
+        task_id: Optional[int] = None,
+        source_keyword: Optional[str] = None,
+    ):
         pass
 
 

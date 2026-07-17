@@ -180,6 +180,7 @@
     .qr-modal-card { max-width: 420px; }
     .candidate-modal-card { width: min(980px, 100%); }
     .col-id { width: 70px; }
+    .col-provider { width: 104px; }
     .col-status { width: 96px; }
     .col-note-progress { width: 190px; }
     .col-comments { width: 150px; }
@@ -221,11 +222,20 @@
     .btn.danger { background: var(--soft-red); color: var(--red); border-color: #fecaca; }
     .btn.ghost { background: #fff; border-color: var(--line); }
     .btn.small { min-height: 25px; padding: 3px 7px; font-size: 12px; }
-    .tabs, .mode-tabs { display: grid; gap: 3px; padding: 3px; background: #eef2f7; border-radius: 7px; }
+    .tabs, .mode-tabs, .provider-tabs { display: grid; gap: 3px; padding: 3px; background: #eef2f7; border-radius: 7px; }
     .task-type-tabs { grid-template-columns: repeat(3, 1fr); }
     .mode-tabs { grid-template-columns: repeat(2, 1fr); }
-    .tab, .mode-tab { border: 0; border-radius: 5px; padding: 5px 4px; background: transparent; color: #475569; font-weight: 750; }
-    .tab.active, .mode-tab.active { background: #fff; color: #111827; box-shadow: var(--shadow); }
+    .provider-tabs { grid-template-columns: repeat(2, 1fr); }
+    .tab, .mode-tab, .provider-tab { border: 0; border-radius: 5px; padding: 5px 4px; background: transparent; color: #475569; font-weight: 750; }
+    .tab.active, .mode-tab.active, .provider-tab.active { background: #fff; color: #111827; box-shadow: var(--shadow); }
+    .provider-picker, .provider-options { border: 1px solid var(--line); border-radius: 7px; padding: 7px; background: #fbfcfd; }
+    .provider-options { border-color: #bfdbfe; background: #f8fbff; }
+    .provider-checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .check-option { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; color: #465366; }
+    .check-option input { margin: 0; }
+    .provider-badge { display: inline-flex; align-items: center; min-height: 22px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .provider-badge.local { background: #f8fafc; color: #475569; }
+    .provider-badge.api { border-color: #99f6e4; background: #f0fdfa; color: var(--teal); }
     .pill {
       display: inline-flex;
       align-items: center;
@@ -250,7 +260,7 @@
       color: #991b1b;
     }
     .table-wrap { flex: 1; min-height: 0; overflow: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 820px; }
+    table { width: 100%; border-collapse: collapse; min-width: 930px; }
     th {
       position: sticky;
       top: 0;

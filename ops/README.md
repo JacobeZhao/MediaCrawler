@@ -17,24 +17,35 @@ Supervised service:
 .\.venv\Scripts\python.exe .\ops\supervisor_windows.py
 ```
 
-The supervisor restarts the service if it exits. Configure it with environment
-variables:
+Both launch modes load the repository-root `.env`. Existing process variables
+take priority over that file. The supervisor restarts the service if it exits.
+Configure it with:
 
-- `HOST`: bind host, default `0.0.0.0`
-- `PORT`: bind port, default `8088`
-- `XHS_PYTHON`: Python executable path, default `.venv\Scripts\python.exe`
-- `XHS_LOG_DIR`: log directory, default `logs`
-- `XHS_RESTART_DELAY_SECONDS`: restart delay, default `5`
+- `HOST`: service bind host, default `0.0.0.0`
+- `PORT`: service bind port, default `8088`
+- `XHS_PYTHON`: supervisor child Python, default `.venv\Scripts\python.exe`
+- `XHS_LOG_DIR`: log directory for both wrappers, default `logs`
+- `XHS_RESTART_DELAY_SECONDS`: supervisor restart delay, default `5`
+
+Set `XHS_ENV_FILE` in the parent process to select a different environment file.
+Relative paths are resolved from the repository root, and a selected file must
+exist. Both Windows wrappers intentionally pass `--headless`; use
+`python start_xhs_service.py` without that flag when a headed browser is required.
+The foreground CMD must choose its redirection directory before Python starts,
+so its `XHS_LOG_DIR` must be inherited from the parent process; values inside
+`.env` still configure the Python service itself.
 
 ## Logs
 
 Runtime logs are written under `logs/` by default:
 
-- `service-8088.log`
-- `service-8088.err.log`
+- `service-foreground.log` and `service-foreground.err.log` for the foreground CMD
+- `service-<port>.log` and `service-<port>.err.log` for the supervisor
 - `service-supervisor.log`
 
 Logs are runtime artifacts and are ignored by Git.
+The Windows supervisor rotates each log at 20 MiB and retains five backups
+(`.1` through `.5`).
 
 ## Health Checks
 

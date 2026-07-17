@@ -137,7 +137,12 @@ class ExportService:
                 },
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
-                return resp.read()
+                raw = resp.read()
+            if raw:
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "wb") as f:
+                    f.write(raw)
+            return raw
         except Exception:
             return None
 

@@ -11,7 +11,16 @@ router = APIRouter()
 @router.get("/api/status")
 async def get_status():
     status = get_engine().get_status()
-    status["queue_size"] = get_task_manager().queue_size()
+    task_manager = get_task_manager()
+    readiness = await task_manager.readiness()
+    status["queue_size"] = task_manager.queue_size()
+    status["providers"] = {
+        provider: {
+            **provider_status.as_dict(),
+            "queue_size": task_manager.queue_size(provider),
+        }
+        for provider, provider_status in readiness.items()
+    }
     status["ready_accounts"] = get_pool().ready_count()
     status["circuit_breaker"] = circuit_breaker.status()
     status["rate_limiter"] = rate_limiter.snapshot()
@@ -28,12 +37,18 @@ async def healthz():
 async def readyz():
     engine = get_engine()
     pool = get_pool()
-    ready = engine.status == "ready" or pool.has_ready_engine()
+    task_manager = get_task_manager()
+    readiness = await task_manager.readiness()
+    ready = any(provider_status.ready for provider_status in readiness.values())
     return {
         "status": "ok" if ready else "not_ready",
         "engine_status": engine.status,
         "ready_accounts": pool.ready_count(),
-        "queue_size": get_task_manager().queue_size(),
+        "queue_size": task_manager.queue_size(),
+        "providers": {
+            provider: provider_status.as_dict()
+            for provider, provider_status in readiness.items()
+        },
     }
 
 

@@ -100,6 +100,7 @@
               <tr>
                 <th class="col-id">ID</th>
                 <th>任务</th>
+                <th class="col-provider">方式</th>
                 <th class="col-status">状态</th>
                 <th class="col-note-progress">笔记进度</th>
                 <th class="col-comments">评论</th>
@@ -130,13 +131,42 @@
               <button class="mode-tab" type="button" data-task-mode="batch">批量</button>
             </div>
 
+            <div class="provider-picker mt-sm">
+              <div class="row-between">
+                <span class="label">执行方式</span>
+                <span id="providerReadiness" class="pill neutral">状态加载中</span>
+              </div>
+              <div class="provider-tabs mt-xs" role="radiogroup" aria-label="执行方式">
+                <button class="provider-tab active" type="button" data-task-provider="local" role="radio" aria-checked="true">本地爬虫</button>
+                <button class="provider-tab" type="button" data-task-provider="justoneapi" role="radio" aria-checked="false">JustOneAPI</button>
+              </div>
+            </div>
+
+            <div id="justoneApiOptions" class="provider-options hidden mt-sm">
+              <div class="row-between">
+                <span class="label">JustOneAPI 选项</span>
+                <span class="small-text muted">请求限制</span>
+              </div>
+              <div class="form-grid mt-xs">
+                <div class="field"><label class="label" for="justoneMaxPages">最多页数</label><input class="input" id="justoneMaxPages" type="number" min="1" max="100" value="3"></div>
+                <div class="field"><label class="label" for="justoneMaxRequests">最多请求</label><input class="input" id="justoneMaxRequests" type="number" min="1" max="1000" value="20"></div>
+                <div class="field"><label class="label" for="justoneNoteType">笔记类型</label><select class="select" id="justoneNoteType"><option value="ALL">全部</option><option value="NORMAL_NOTE">图文</option><option value="VIDEO_NOTE">视频</option></select></div>
+                <div class="field"><label class="label" for="justoneTimeFilter">时间范围</label><select class="select" id="justoneTimeFilter"><option value="ALL" selected>不限</option><option value="ONE_DAY">一天内</option><option value="ONE_WEEK">一周内</option><option value="HALF_YEAR">半年内</option></select></div>
+              </div>
+              <div class="provider-checks mt-sm">
+                <label class="check-option"><input type="checkbox" id="justoneIncludeDetails" checked> 笔记详情</label>
+                <label class="check-option"><input type="checkbox" id="justoneIncludeComments"> 评论</label>
+                <label class="check-option"><input type="checkbox" id="justoneIncludeReplies" disabled> 回复</label>
+              </div>
+            </div>
+
             <form id="searchSingleForm" class="task-form mt-md" data-task-form="search-single">
               <div class="field"><label class="label">关键词</label><input class="input" name="keyword" placeholder="例如：宝宝面条" required></div>
               <div class="form-grid mt-sm">
                 <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
                 <div class="field"><label class="label">每篇评论</label><input class="input" name="max_comments" type="number" min="0" max="10000" value="10000"></div>
                 <div class="field"><label class="label">排序</label><select class="select" name="sort_type"><option value="popularity_descending">热度</option><option value="time_descending">最新</option><option value="general">默认</option></select></div>
-                <div class="field"><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
+                <div class="field" data-local-only><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
               </div>
               <label class="row small-text mt-sm"><input type="checkbox" name="force"> 强制重爬</label>
               <button class="btn primary full-width mt-md">提交搜索任务</button>
@@ -148,7 +178,7 @@
                 <div class="field"><label class="label">笔记数</label><input class="input" name="max_notes" type="number" min="1" max="500" value="20"></div>
                 <div class="field"><label class="label">每篇评论</label><input class="input" name="max_comments" type="number" min="0" max="10000" value="10000"></div>
                 <div class="field"><label class="label">排序</label><select class="select" name="sort_type"><option value="popularity_descending">热度</option><option value="time_descending">最新</option><option value="general">默认</option></select></div>
-                <div class="field"><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
+                <div class="field" data-local-only><label class="label">天数限制</label><input class="input" name="days_limit" type="number" min="0" value="30"></div>
               </div>
               <button class="btn primary full-width mt-md">提交批量搜索</button>
             </form>

@@ -14,8 +14,12 @@ the Xiaohongshu crawler.
   login sessions.
 - `service_db.py`: service runtime database access for tasks, accounts, tags,
   leases, and heartbeats.
-- `task_manager.py`: single-process task queue worker and lease management.
-- `account_pool.py`: pooled account crawler engines and account health state.
+- `task_manager.py`: provider-aware in-process queues, workers, checkpoints, and
+  lease management.
+- `executors/`: the executor contract and the separate `local` and `justoneapi`
+  one-time task execution paths.
+- `account_pool.py`: pooled account crawler engines and account health state used
+  only by the `local` provider.
 - `crawler_engine.py`: current crawler facade over Playwright, the XHS client,
   crawl execution, and persistence calls.
 - `static/`: no-build frontend served by FastAPI.
@@ -25,6 +29,8 @@ the Xiaohongshu crawler.
 - Do not access `_backup_before_cleanup_*/` for active development.
 - Do not split `crawler_engine.py` without adding focused tests first.
 - Do not run multiple uvicorn workers against one runtime directory.
+- Keep provider-specific network, retry, and normalization behavior behind the
+  executor boundary; do not route `justoneapi` through Playwright or `AccountPool`.
 - Keep routes thin; put orchestration in `services/`.
 - Keep runtime data under ignored directories such as `data/`, `browser_data/`,
   and `logs/`.

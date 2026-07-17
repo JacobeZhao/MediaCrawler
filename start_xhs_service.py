@@ -24,6 +24,10 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from service.runtime_env import load_root_env
+
+load_root_env()
+
 import uvicorn
 
 
@@ -43,7 +47,7 @@ def _int_env(name: str, default: int) -> int:
 
 def parse_args():
     default_host = os.environ.get("HOST", "0.0.0.0")
-    default_port = _int_env("PORT", 8088)
+    default_port = os.environ.get("PORT") or "8088"
     p = argparse.ArgumentParser(description="XHS Crawler Web Service")
     p.add_argument("--host", default=None, help=f"Bind host (default: {default_host})")
     p.add_argument("--port", type=int, default=None, help=f"Bind port (default: {default_port})")
@@ -54,8 +58,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    host = args.host or os.environ.get("HOST", "0.0.0.0")
-    port = args.port or _int_env("PORT", 8088)
+    host = args.host if args.host is not None else os.environ.get("HOST", "0.0.0.0")
+    port = args.port if args.port is not None else _int_env("PORT", 8088)
     reload = args.reload or _bool_env("RELOAD", False)
 
     # Set browser headless mode before importing the FastAPI application.

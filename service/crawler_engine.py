@@ -33,8 +33,12 @@ from media_platform.xhs.login import XiaoHongShuLogin
 from store import xhs as xhs_store
 from tools import utils
 from var import crawler_type_var, source_keyword_var
+from .image_downloader import download_note_images
 from .proxy_config import build_proxy_url
 from .rate_limiter import rate_limiter
+
+
+_IMAGE_DIR = os.path.join(_PROJECT_ROOT, "data", "xhs", "images")
 
 
 class CaptchaException(Exception):
@@ -507,6 +511,7 @@ class XHSCrawlerEngine:
                             continue
                     await xhs_store.update_xhs_note(nd)
                     nid = nd.get("note_id", "")
+                    await download_note_images(nid, nd.get("image_list", []), _IMAGE_DIR)
                     seen_ids.add(nid)
                     note_ids.append(nid)
                     token = nd.get("xsec_token", "")
@@ -642,6 +647,7 @@ class XHSCrawlerEngine:
                 if nd:
                     await xhs_store.update_xhs_note(nd)
                     nid = nd.get("note_id", "")
+                    await download_note_images(nid, nd.get("image_list", []), _IMAGE_DIR)
                     seen_ids.add(nid)
                     collected_note_ids.append(nid)
                     collected_xsec_tokens.append(nd.get("xsec_token", ""))
@@ -811,6 +817,7 @@ class XHSCrawlerEngine:
                     if "note_id" not in nd or not nd["note_id"]:
                         nd["note_id"] = note_id
                     await xhs_store.update_xhs_note(nd)
+                    await download_note_images(note_id, nd.get("image_list", []), _IMAGE_DIR)
                     done += 1
                 else:
                     utils.logger.warning(f"[crawl_notes] all methods failed for note_id={note_id}, URL may lack xsec_token")
