@@ -9,6 +9,7 @@ from ..providers.justoneapi.options import (
     REQUEST_BUDGET_MAX,
     REQUEST_BUDGET_MIN,
     TASK_OPTION_DEFAULTS,
+    TRANSPORT_SORT_TYPE_DEFAULT,
     TimeFilter,
 )
 
@@ -56,11 +57,14 @@ class SearchTaskRequest(ProviderTaskRequest):
     days_limit: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def validate_provider_time_filter(self):
-        if self.provider == "justoneapi" and self.days_limit:
-            raise ValueError(
-                "days_limit is only supported by local; use provider_options.time_filter"
-            )
+    def validate_provider_search_options(self):
+        if self.provider == "justoneapi":
+            if self.days_limit:
+                raise ValueError(
+                    "days_limit is only supported by local; use provider_options.time_filter"
+                )
+            if "sort_type" not in self.model_fields_set:
+                self.sort_type = TRANSPORT_SORT_TYPE_DEFAULT
         return self
 
 
@@ -78,11 +82,14 @@ class BatchSearchTaskRequest(ProviderTaskRequest):
     days_limit: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def validate_provider_time_filter(self):
-        if self.provider == "justoneapi" and self.days_limit:
-            raise ValueError(
-                "days_limit is only supported by local; use provider_options.time_filter"
-            )
+    def validate_provider_search_options(self):
+        if self.provider == "justoneapi":
+            if self.days_limit:
+                raise ValueError(
+                    "days_limit is only supported by local; use provider_options.time_filter"
+                )
+            if "sort_type" not in self.model_fields_set:
+                self.sort_type = TRANSPORT_SORT_TYPE_DEFAULT
         return self
 
 

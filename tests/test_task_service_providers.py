@@ -9,7 +9,11 @@ from service import service_db as db
 from service.executors.base import ProviderReadiness
 from pydantic import ValidationError
 
-from service.schemas.tasks import JustOneApiOptions, SearchTaskRequest
+from service.schemas.tasks import (
+    BatchSearchTaskRequest,
+    JustOneApiOptions,
+    SearchTaskRequest,
+)
 from service.services.task_service import TaskService
 
 
@@ -169,6 +173,31 @@ class TaskServiceProviderTest(unittest.IsolatedAsyncioTestCase):
                 "note_type": "ALL",
                 "time_filter": "ALL",
             },
+        )
+
+    def test_search_sort_defaults_are_provider_specific(self):
+        self.assertEqual(
+            SearchTaskRequest(keyword="local").sort_type,
+            "popularity_descending",
+        )
+        self.assertEqual(
+            SearchTaskRequest(keyword="api", provider="justoneapi").sort_type,
+            "general",
+        )
+        self.assertEqual(
+            BatchSearchTaskRequest(
+                keywords=["api"],
+                provider="justoneapi",
+            ).sort_type,
+            "general",
+        )
+        self.assertEqual(
+            SearchTaskRequest(
+                keyword="api",
+                provider="justoneapi",
+                sort_type="time_descending",
+            ).sort_type,
+            "time_descending",
         )
 
     async def test_search_filters_have_distinct_provider_scopes(self):

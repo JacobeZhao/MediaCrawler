@@ -502,6 +502,13 @@
     });
   }
 
+  function applyProviderSearchDefaults(provider) {
+    const sortType = provider === "justoneapi" ? "general" : "popularity_descending";
+    document.querySelectorAll('[data-task-form^="search-"] select[name="sort_type"]').forEach(select => {
+      select.value = sortType;
+    });
+  }
+
   function refreshProxySelects() {
     if ($("cookieProxy")) $("cookieProxy").innerHTML = proxyOptions($("cookieProxy").value);
     if ($("qrProxy")) $("qrProxy").innerHTML = proxyOptions($("qrProxy").value);
@@ -607,7 +614,9 @@
     });
     document.querySelectorAll("[data-task-provider]").forEach(tab => {
       tab.addEventListener("click", () => {
-        state.taskProvider = tab.dataset.taskProvider;
+        const provider = tab.dataset.taskProvider;
+        if (provider !== state.taskProvider) applyProviderSearchDefaults(provider);
+        state.taskProvider = provider;
         renderTaskForm();
       });
     });
