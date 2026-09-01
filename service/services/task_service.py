@@ -284,6 +284,10 @@ class TaskService:
         if len(req.notes) > settings.max_batch_tasks:
             raise HTTPException(400, f"Batch size exceeds MAX_BATCH_TASKS={settings.max_batch_tasks}.")
         params = {"notes": [n.model_dump() for n in req.notes]}
+        if "max_comments" in req.model_fields_set:
+            params["max_comments"] = req.max_comments
+        if "include_replies" in req.model_fields_set:
+            params["include_replies"] = req.include_replies
         if "provider_options" in request_params:
             params["provider_options"] = request_params["provider_options"]
         task_id = await self._task_manager.submit(TaskType.NOTE.value, params, provider)

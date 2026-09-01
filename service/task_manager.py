@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from config.settings import settings
+from tools.redaction import redact_sensitive_text
 
 from . import service_db as db
 from .executors.base import (
@@ -475,6 +476,8 @@ class TaskManager:
         error: Optional[str] = None,
         retry_after_seconds: Optional[float] = None,
     ) -> bool:
+        message = redact_sensitive_text(message)
+        error = redact_sensitive_text(error) if error is not None else None
         retry_at = None
         if retry_after_seconds is not None:
             retry_delay = max(0.0, float(retry_after_seconds))
@@ -494,7 +497,7 @@ class TaskManager:
         )
 
     async def _fail_owned_task(self, task_id: int, exc: Exception) -> bool:
-        error = str(exc) or type(exc).__name__
+        error = redact_sensitive_text(str(exc) or type(exc).__name__)
         return await db.update_task_status_if_owned(
             task_id,
             self._lease_owner,

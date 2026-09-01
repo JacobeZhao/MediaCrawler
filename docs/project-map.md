@@ -35,6 +35,7 @@ sync tools.
 - `config/`: runtime paths and crawler configuration.
 - `tools/sync_comments_to_dwd.py`: MySQL ODS-to-DWD sync for comment threads.
 - `tools/create_search_tasks.py`: reusable task creation helper.
+- `tools/export_note_comments_md.py`: saved note/comment API export to Markdown.
 
 ## Frontend
 
@@ -59,8 +60,7 @@ Runtime state is not source code:
 - `browser_data/`: browser profiles and account login state.
 - `database/*.db`: crawler SQLite data.
 - `logs/`: service logs.
-- `data_archive/`: local migration evidence and one-off snapshots. It is not
-  source code and should not be read by default.
+- `exports/`: generated business exports. It is ignored runtime output, not source.
 
 ## Refactor Boundaries
 

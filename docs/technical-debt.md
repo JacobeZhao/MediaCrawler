@@ -21,15 +21,20 @@ rewrites.
 
 ## Operations And Context Debt
 
+- The administrative API has no authentication, permits all CORS origins, and
+  the normal launcher binds to `0.0.0.0`. Candidate-account workflows also
+  intentionally return passwords and cookies to the current operator console.
+  Do not expose this service to an untrusted network. Choosing loopback-only
+  defaults or adding authentication/CSRF protection is a product/deployment
+  decision and must be completed before broader exposure.
 - Package metadata reports version `0.1.0` while runtime settings, OpenAPI, and
   `/version` report `1.0.0`. Choose one release version before consolidating it.
-- `exports/` contains untracked generated output but is not ignored. Confirm its
-  ownership policy before making it a repository-wide ignore rule.
-- Application shutdown does not explicitly dispose the cached SQLAlchemy async
-  engines in `database/db_session.py`. Process exit releases them, but in-process
-  lifecycle tests and reload tooling can retain SQLite file handles.
-- The Windows supervisor validates its restart delay as an integer but not as a
-  nonnegative value; a negative delay fails only after a child process exits.
+- SQLite schema upgrades are cumulative startup code rather than versioned
+  migrations. The content schema can merge/delete duplicate business keys
+  before adding unique indexes; future destructive changes need an explicit
+  migration ledger, preflight report, and recovery rehearsal.
+- Dependencies are declared consistently in `pyproject.toml` and
+  `requirements.txt`, but there is no lockfile or automated parity/CI gate.
 
 ## Recommended Refactor Order
 
@@ -45,6 +50,14 @@ rewrites.
 
 ## Recently Reduced
 
+- Application shutdown now disposes cached SQLAlchemy async engines and clears
+  their schema-initialization state, with a focused lifecycle regression test.
+- The Windows supervisor now rejects negative restart delays during configuration
+  loading instead of crashing after a child process exits.
+- SQLite WAL/SHM sidecars are ignored for both runtime database locations without
+  deleting or modifying active database files.
+- The documented MySQL comment-sync tool now declares its `pymysql` dependency in
+  both package manifests.
 - The supported Python launch paths now load a strict root `.env` before
   settings are frozen. CLI and inherited process values retain precedence,
   malformed files fail atomically without exposing values, and launcher-order
@@ -62,10 +75,17 @@ rewrites.
   `service/providers/justoneapi/options.py`; schema validation, task scope,
   legacy executor parsing, and transport defaults share that provider-owned
   source while retaining their distinct layer behavior.
+- Local task lease loss now escapes crawler progress callbacks before further
+  comment writes and leaves the browser account ready for the replacement owner.
+- Runtime logs and persisted task errors redact credential-bearing URLs, headers,
+  cookies, passwords, and provider response bodies; content-store logs are ID-only.
+- Generated `exports/` output is ignored, and obsolete backup/restore markers were
+  removed after their directories were explicitly deleted.
+- Expired QR sessions are rejected on access, and application shutdown now closes
+  every unadopted temporary QR engine/profile.
 
 ## Do Not Do
 
 - Do not rewrite the crawler core and storage layer in the same change.
 - Do not delete `browser_data/` or active service DB files as part of source
   cleanup.
-- Do not rely on files under `_backup_before_cleanup_*/` for active development.

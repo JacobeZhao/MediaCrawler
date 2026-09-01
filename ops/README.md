@@ -77,15 +77,10 @@ Deploy source code and static assets, but exclude runtime state:
 - `.venv/`
 - `data/`
 - `browser_data/`
-- `archive/`
-- `data_archive/`
+- `exports/`
 - `logs/`
 - `database/*.db`
-- `_backup_before_cleanup_*/`
 
-Before replacing code on Tianyi Cloud, keep a timestamped backup of the current
-project directory and do not delete browser account directories unless login
-state can be recreated.
-
-`data_archive/` is retained only as local migration evidence and recovery
-material. It is not part of the active source tree.
+Before replacing code on Tianyi Cloud, keep any temporary rollback copy outside
+the project directory and remove it after the deployment is verified. Do not
+delete browser account directories unless login state can be recreated.

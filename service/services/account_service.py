@@ -59,23 +59,30 @@ class QrSessionService:
             user_data_dir=temp_dir,
             proxy_config=build_playwright_proxy(proxy_profile),
         )
-        await temp_engine.start()
+        try:
+            await temp_engine.start()
+            result = await temp_engine.get_qrcode_for_web()
+            if "error" in result:
+                raise HTTPException(400, result["error"])
 
-        result = await temp_engine.get_qrcode_for_web()
-        if "error" in result:
-            await temp_engine.stop()
-            raise HTTPException(400, result["error"])
+            self._sessions[session_id] = {
+                "engine": temp_engine,
+                "name": name.strip(),
+                "proxy_id": proxy_id,
+                "session_before": result["session_before"],
+                "created_at": time.monotonic(),
+            }
+            return {"session_id": session_id, "qrcode": result["qrcode"]}
+        except BaseException:
+            try:
+                await temp_engine.stop()
+            except BaseException:
+                pass
+            self._delete_session_dir(session_id)
+            raise
 
-        self._sessions[session_id] = {
-            "engine": temp_engine,
-            "name": name.strip(),
-            "proxy_id": proxy_id,
-            "session_before": result["session_before"],
-            "created_at": time.monotonic(),
-        }
-        return {"session_id": session_id, "qrcode": result["qrcode"]}
-
-    def get(self, session_id: str) -> dict:
+    async def get(self, session_id: str) -> dict:
+        await self.cleanup_expired()
         session = self._sessions.get(session_id)
         if not session:
             raise HTTPException(404, "QR session not found or expired.")
@@ -95,6 +102,10 @@ class QrSessionService:
             except Exception:
                 pass
             self._delete_session_dir(session_id)
+
+    async def close_all(self):
+        for session_id in list(self._sessions):
+            await self.cancel(session_id)
 
     def forget(self, session_id: str):
         self._sessions.pop(session_id, None)
@@ -173,7 +184,7 @@ class AccountService:
         return await self._qr_sessions.start(req.name, req.proxy_id)
 
     async def poll_qrcode(self, session_id: str):
-        session = self._qr_sessions.get(session_id)
+        session = await self._qr_sessions.get(session_id)
         eng: XHSCrawlerEngine = session["engine"]
         result = await eng.check_qrcode_login_done(session["session_before"])
 

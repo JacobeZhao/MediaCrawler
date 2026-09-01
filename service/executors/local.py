@@ -8,6 +8,7 @@ from typing import Any, Dict, Set
 
 from config.settings import settings
 from media_platform.xhs.help import parse_note_info_from_note_url
+from tools.redaction import redact_sensitive_text
 
 from .. import service_db as db
 from ..account_pool import AccountPool
@@ -132,7 +133,7 @@ class LocalTaskExecutor(TaskExecutor):
                     event_type,
                     account_id=engine.account_id,
                     task_id=context.task_id,
-                    message=str(exc),
+                    message=redact_sensitive_text(exc),
                 )
 
                 if settings.task_pause_on_account_error:
@@ -212,6 +213,11 @@ class LocalTaskExecutor(TaskExecutor):
             note_items = params.get("notes", [])
             result = await engine.crawl_notes(
                 note_items=note_items,
+                max_comments=self._clamp_positive(
+                    params.get("max_comments", 0),
+                    settings.crawler_task_max_comments_per_note,
+                ),
+                include_replies=bool(params.get("include_replies", False)),
                 progress_cb=progress_cb,
             )
             for item in note_items:

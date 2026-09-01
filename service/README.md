@@ -26,7 +26,6 @@ the Xiaohongshu crawler.
 
 ## Change Rules
 
-- Do not access `_backup_before_cleanup_*/` for active development.
 - Do not split `crawler_engine.py` without adding focused tests first.
 - Do not run multiple uvicorn workers against one runtime directory.
 - Keep provider-specific network, retry, and normalization behavior behind the

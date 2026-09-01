@@ -11,9 +11,6 @@ This repository contains the custom Xiaohongshu crawler web service restored fro
 - `store/xhs/`, `database/`, `config/`, `tools/`, `base/`, `cache/`, `model/`: runtime dependencies used by the XHS service path.
 - `libs/stealth.min.js`: browser stealth script used by `service/crawler_engine.py`.
 
-Removed source and runtime files are archived under `_backup_before_cleanup_*`.
-That backup directory is not part of the active codebase and should not be read or used during normal development.
-
 ## Start
 
 ```powershell
@@ -82,8 +79,7 @@ These paths are runtime state and are ignored by Git:
 
 - `data/`
 - `browser_data/`
-- `archive/`
-- `data_archive/`
+- `exports/`
 - `logs/`
 - `database/*.db`
 - `service/*.db`

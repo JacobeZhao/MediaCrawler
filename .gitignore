@@ -18,15 +18,16 @@ env/
 .mypy_cache/
 
 data/
-data_archive/
 browser_data/
-archive/
+exports/
 logs/
 database/*.db
+database/*.db-shm
+database/*.db-wal
 service/*.db
+service/*.db-shm
+service/*.db-wal
 
 node_modules/
 dist/
 build/
-
-_backup_before_cleanup_*/

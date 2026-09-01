@@ -42,11 +42,7 @@ MYSQL_PASSWORD=...
 - `dim_xhs_keyword_period_df`：关键词周期维表，包含 `category`, `keyword`, `update_cycle`, `period_label`, `active_from`, `active_to`
 - `dim_xhs_comment_source_period_df`：评论来源周期维表，包含 `category`, `source_keyword`, `search_index`, `update_cycle`, `period_label`, `active_from`, `active_to`
 
-## 探测脚本归档
+## 临时探测脚本
 
-本地临时探测脚本已经从项目根目录移到 `data_archive/tmp_20260626/`，包括：
-
-- `.tmp_mysql_probe.py`：测试连接并列出可见数据库
-- `.tmp_mysql_schema_probe.py`：只读输出 `ai_platform` 表名、行数和字段
-
-后续如需长期维护，应整理成 `tools/` 下的正式只读诊断工具，不再放回项目根目录。
+历史临时探测脚本已经删除。新的单次探测应在系统临时目录中执行并及时
+清理；需要长期维护的只读诊断能力应整理成 `tools/` 下的正式工具。

@@ -38,7 +38,9 @@ def load_supervisor_config(
     try:
         restart_delay_seconds = int(target.get('XHS_RESTART_DELAY_SECONDS', '5'))
     except ValueError:
-        raise ValueError('XHS_RESTART_DELAY_SECONDS must be an integer') from None
+        raise ValueError('XHS_RESTART_DELAY_SECONDS must be a nonnegative integer') from None
+    if restart_delay_seconds < 0:
+        raise ValueError('XHS_RESTART_DELAY_SECONDS must be a nonnegative integer')
     try:
         port_number = int(target.get('PORT', '8088'))
     except ValueError:

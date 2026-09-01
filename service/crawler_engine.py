@@ -31,9 +31,12 @@ from media_platform.xhs.field import SearchSortType
 from media_platform.xhs.help import get_search_id, parse_creator_info_from_url, parse_note_info_from_note_url
 from media_platform.xhs.login import XiaoHongShuLogin
 from store import xhs as xhs_store
-from tools import utils
+from tools.crawler_util import convert_browser_context_cookies, convert_cookies
+from tools.redaction import redact_sensitive_text
+from tools.utils import logger
 from var import crawler_type_var, source_keyword_var
 from .image_downloader import download_note_images
+from .executors.base import ExecutorLeaseLost
 from .proxy_config import build_proxy_url
 from .rate_limiter import rate_limiter
 
@@ -143,8 +146,9 @@ class XHSCrawlerEngine:
                 self.message = "Ready"
         except Exception as exc:
             self.status = "error"
-            self.message = f"Startup failed: {exc}"
-            utils.logger.error(f"[XHSCrawlerEngine.start] {exc}")
+            safe_error = redact_sensitive_text(exc)
+            self.message = f"Startup failed: {safe_error}"
+            logger.error(f"[XHSCrawlerEngine.start] {safe_error}")
 
     async def stop(self):
         """Gracefully stop browser."""
@@ -207,7 +211,7 @@ class XHSCrawlerEngine:
             self.message = "Cookie is invalid; please refresh it"
             return False
         except Exception as exc:
-            self.message = f"Failed to set cookie: {exc}"
+            self.message = f"Failed to set cookie: {redact_sensitive_text(exc)}"
             return False
 
     async def trigger_qrcode_login(self) -> bool:
@@ -230,7 +234,7 @@ class XHSCrawlerEngine:
                 return True
             return False
         except Exception as exc:
-            self.message = f"QR login failed: {exc}"
+            self.message = f"QR login failed: {redact_sensitive_text(exc)}"
             return False
 
     def get_status(self) -> Dict:
@@ -254,9 +258,11 @@ class XHSCrawlerEngine:
             self_info = await self._xhs_client.query_self()
             ok = bool(self_info and self_info.get("data", {}).get("result", {}).get("success"))
             if not ok and self_info:
-                error = self_info.get("msg") or str(self_info)
+                error = redact_sensitive_text(
+                    self_info.get("msg") or "XHS login probe returned an unsuccessful result"
+                )
         except Exception as exc:
-            error = str(exc)
+            error = redact_sensitive_text(exc)
         return {"ok": ok, "has_login_cookie": has_login_cookie, "error": error}
 
     # ------------------------------------------------------------------ #
@@ -289,12 +295,19 @@ class XHSCrawlerEngine:
             except CaptchaException as exc:
                 self.status = "captcha"
                 self.message = "Account requires captcha; switch account"
-                utils.logger.warning(f"[XHSCrawlerEngine.search_keyword] CAPTCHA: {exc}")
+                logger.warning(
+                    f"[XHSCrawlerEngine.search_keyword] CAPTCHA: {redact_sensitive_text(exc)}"
+                )
+                raise
+            except ExecutorLeaseLost:
+                self.status = "ready"
+                self.message = "Ready"
                 raise
             except Exception as exc:
                 self.status = "error"
-                self.message = f"Search failed: {exc}"
-                utils.logger.error(f"[XHSCrawlerEngine.search_keyword] {exc}")
+                safe_error = redact_sensitive_text(exc)
+                self.message = f"Search failed: {safe_error}"
+                logger.error(f"[XHSCrawlerEngine.search_keyword] {safe_error}")
                 raise
 
     async def crawl_creator(
@@ -321,17 +334,26 @@ class XHSCrawlerEngine:
             except CaptchaException as exc:
                 self.status = "captcha"
                 self.message = "Account requires captcha; switch account"
-                utils.logger.warning(f"[XHSCrawlerEngine.crawl_creator] CAPTCHA: {exc}")
+                logger.warning(
+                    f"[XHSCrawlerEngine.crawl_creator] CAPTCHA: {redact_sensitive_text(exc)}"
+                )
+                raise
+            except ExecutorLeaseLost:
+                self.status = "ready"
+                self.message = "Ready"
                 raise
             except Exception as exc:
                 self.status = "error"
-                self.message = f"Crawl failed: {exc}"
-                utils.logger.error(f"[XHSCrawlerEngine.crawl_creator] {exc}")
+                safe_error = redact_sensitive_text(exc)
+                self.message = f"Crawl failed: {safe_error}"
+                logger.error(f"[XHSCrawlerEngine.crawl_creator] {safe_error}")
                 raise
 
     async def crawl_notes(
         self,
         note_items: List[Dict],  # [{"note_input": url_or_id, "d_level": "D2", "quality": "浼樼瓑鐢?}, ...]
+        max_comments: int = 0,
+        include_replies: bool = False,
         progress_cb: Optional[Callable[[str], Any]] = None,
     ) -> Dict:
         """Crawl specific notes by URL or ID."""
@@ -339,19 +361,31 @@ class XHSCrawlerEngine:
             self.status = "crawling"
             self.message = f"Crawling {len(note_items)} notes"
             try:
-                result = await self._do_crawl_notes(note_items, progress_cb)
+                result = await self._do_crawl_notes(
+                    note_items,
+                    max_comments,
+                    include_replies,
+                    progress_cb,
+                )
                 self.status = "ready"
                 self.message = "Ready"
                 return result
             except CaptchaException as exc:
                 self.status = "captcha"
                 self.message = "Account requires captcha; switch account"
-                utils.logger.warning(f"[XHSCrawlerEngine.crawl_notes] CAPTCHA: {exc}")
+                logger.warning(
+                    f"[XHSCrawlerEngine.crawl_notes] CAPTCHA: {redact_sensitive_text(exc)}"
+                )
+                raise
+            except ExecutorLeaseLost:
+                self.status = "ready"
+                self.message = "Ready"
                 raise
             except Exception as exc:
                 self.status = "error"
-                self.message = f"Crawl failed: {exc}"
-                utils.logger.error(f"[XHSCrawlerEngine.crawl_notes] {exc}")
+                safe_error = redact_sensitive_text(exc)
+                self.message = f"Crawl failed: {safe_error}"
+                logger.error(f"[XHSCrawlerEngine.crawl_notes] {safe_error}")
                 raise
 
     # ------------------------------------------------------------------ #
@@ -382,7 +416,7 @@ class XHSCrawlerEngine:
 
     async def _refresh_client(self):
         """Re-build XiaoHongShuClient using current browser cookies."""
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+        cookie_str, cookie_dict = await convert_browser_context_cookies(
             self._browser_context,
             urls=[self._index_url],
         )
@@ -456,7 +490,7 @@ class XHSCrawlerEngine:
         cutoff_ms = (int(_time.time()) - days_limit * 86400) * 1000 if days_limit > 0 else 0
 
         while total_notes < effective_target:
-            utils.logger.info(f"[search] keyword={keyword} page={page}")
+            logger.info(f"[search] keyword={keyword} page={page}")
             try:
                 await self._before_request("search")
                 notes_res = await self._xhs_client.get_note_by_keyword(
@@ -467,9 +501,9 @@ class XHSCrawlerEngine:
                 )
             except Exception as exc:
                 root_exc = _unwrap_retry_error(exc)
-                utils.logger.error(
+                logger.error(
                     f"[search] get_note_by_keyword error page={page}: "
-                    f"{type(root_exc).__name__}: {root_exc!r}"
+                    f"{type(root_exc).__name__}: {redact_sensitive_text(root_exc)}"
                 )
                 if _is_captcha_error(root_exc):
                     raise CaptchaException(str(root_exc)) from root_exc
@@ -490,7 +524,7 @@ class XHSCrawlerEngine:
             new_items = [i for i in items if i.get("id") not in seen_ids]
             skipped = len(items) - len(new_items)
             if skipped:
-                utils.logger.info(f"[search] page={page} skipped {skipped} existing notes")
+                logger.info(f"[search] page={page} skipped {skipped} existing notes")
 
             sem = asyncio.Semaphore(1)
             tasks = [
@@ -507,7 +541,7 @@ class XHSCrawlerEngine:
                     if cutoff_ms > 0:
                         note_time = nd.get("time", 0)
                         if note_time and int(note_time) < cutoff_ms:
-                            utils.logger.info(f"[search] skip old note {nd.get('note_id')} time={note_time}")
+                            logger.info(f"[search] skip old note {nd.get('note_id')} time={note_time}")
                             continue
                     await xhs_store.update_xhs_note(nd)
                     nid = nd.get("note_id", "")
@@ -616,7 +650,9 @@ class XHSCrawlerEngine:
             if creator_data:
                 await xhs_store.save_creator(user_id, creator=creator_data)
         except Exception as exc:
-            utils.logger.warning(f"[crawl_creator] get_creator_info error: {exc}")
+            logger.warning(
+                f"[crawl_creator] get_creator_info error: {redact_sensitive_text(exc)}"
+            )
 
         total_notes = 0
         total_comments = 0
@@ -634,7 +670,7 @@ class XHSCrawlerEngine:
             new_notes = [n for n in note_list if n.get("note_id") not in seen_ids]
             skipped = len(note_list) - len(new_notes)
             if skipped:
-                utils.logger.info(f"[creator] skipped {skipped} existing notes")
+                logger.info(f"[creator] skipped {skipped} existing notes")
             sem = asyncio.Semaphore(1)
             tasks = [
                 self._fetch_note_detail(
@@ -725,7 +761,10 @@ class XHSCrawlerEngine:
                 root_exc = _unwrap_retry_error(exc)
                 if _is_captcha_error(root_exc):
                     raise CaptchaException(str(root_exc)) from root_exc
-                utils.logger.warning(f"[fetch_note_detail] note_id={note_id} err={exc}")
+                logger.warning(
+                    f"[fetch_note_detail] note_id={note_id} "
+                    f"err={redact_sensitive_text(exc)}"
+                )
                 return None
 
     async def _fetch_and_store_comments(
@@ -733,19 +772,21 @@ class XHSCrawlerEngine:
         note_id: str,
         xsec_token: str,
         max_count: int,
+        include_replies: bool = False,
+        reuse_existing: bool = True,
         progress_cb: Optional[Callable[[str], Any]] = None,
     ) -> int:
         if not note_id:
             return 0
         # Reuse comments already in DB (shared across keywords) 鈥?skip network request
-        if os.path.exists(SQLITE_DB_PATH):
+        if reuse_existing and os.path.exists(SQLITE_DB_PATH):
             async with aiosqlite.connect(SQLITE_DB_PATH) as _cdb:
                 _cur = await _cdb.execute(
                     "SELECT COUNT(*) FROM xhs_note_comment WHERE note_id=?", (note_id,)
                 )
                 _row = await _cur.fetchone()
                 if _row and _row[0] > 0:
-                    utils.logger.info(
+                    logger.info(
                         f"[fetch_comments] note_id={note_id} already has {_row[0]} comments, reusing"
                     )
                     return _row[0]
@@ -754,12 +795,18 @@ class XHSCrawlerEngine:
             # callback signature is (note_id, comments) per client.py
             async def _cb(nid: str, comments: List[Dict]):
                 nonlocal count
-                count += len(comments)
-                await xhs_store.batch_update_xhs_note_comments(nid, comments)
                 if progress_cb:
                     await _safe_call(
                         progress_cb,
-                        f"Fetching comments for {nid}: {count}/{max_count}",
+                        f"Preparing comments for {nid}: {count}/{max_count}",
+                        count,
+                    )
+                await xhs_store.batch_update_xhs_note_comments(nid, comments)
+                count += len(comments)
+                if progress_cb:
+                    await _safe_call(
+                        progress_cb,
+                        f"Fetched comments for {nid}: {count}/{max_count}",
                         count,
                     )
 
@@ -770,17 +817,28 @@ class XHSCrawlerEngine:
                 crawl_interval=random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC),
                 callback=_cb,
                 max_count=max_count,
+                include_sub_comments=include_replies,
             )
         except CaptchaException:
+            raise
+        except ExecutorLeaseLost:
             raise
         except Exception as exc:
             root_exc = _unwrap_retry_error(exc)
             if _is_captcha_error(root_exc):
                 raise CaptchaException(str(root_exc)) from root_exc
-            utils.logger.warning(f"[fetch_comments] note_id={note_id} err={exc}")
+            logger.warning(
+                f"[fetch_comments] note_id={note_id} err={redact_sensitive_text(exc)}"
+            )
         return count
 
-    async def _do_crawl_notes(self, note_items: List[Dict], progress_cb) -> Dict:
+    async def _do_crawl_notes(
+        self,
+        note_items: List[Dict],
+        max_comments: int,
+        include_replies: bool,
+        progress_cb,
+    ) -> Dict:
         config.SAVE_DATA_OPTION = "sqlite"
         await create_tables("sqlite")
         crawler_type_var.set("search")
@@ -788,6 +846,7 @@ class XHSCrawlerEngine:
         total = len(note_items)
         done = 0
         failed = 0
+        total_comments = 0
 
         for item in note_items:
             note_input = item.get("note_input", "").strip()
@@ -811,7 +870,7 @@ class XHSCrawlerEngine:
                 nd = await self._fetch_note_detail(note_id, xsec_source, xsec_token, sem)
                 # Fallback: use Playwright browser to navigate to note URL (handles missing xsec_token)
                 if not nd:
-                    utils.logger.info(f"[crawl_notes] API/HTML failed for {note_id}, trying browser fallback")
+                    logger.info(f"[crawl_notes] API/HTML failed for {note_id}, trying browser fallback")
                     nd = await self._fetch_note_via_browser(note_id, xsec_token, xsec_source)
                 if nd:
                     if "note_id" not in nd or not nd["note_id"]:
@@ -819,25 +878,60 @@ class XHSCrawlerEngine:
                     await xhs_store.update_xhs_note(nd)
                     await download_note_images(note_id, nd.get("image_list", []), _IMAGE_DIR)
                     done += 1
+                    if max_comments > 0:
+                        async def _comment_progress(
+                            message: str,
+                            note_comment_count: int = 0,
+                        ):
+                            if progress_cb:
+                                await _safe_call(
+                                    progress_cb,
+                                    message,
+                                    done,
+                                    total_comments + note_comment_count,
+                                )
+
+                        total_comments += await self._fetch_and_store_comments(
+                            note_id,
+                            xsec_token,
+                            max_comments,
+                            include_replies=include_replies,
+                            reuse_existing=not include_replies,
+                            progress_cb=_comment_progress,
+                        )
                 else:
-                    utils.logger.warning(f"[crawl_notes] all methods failed for note_id={note_id}, URL may lack xsec_token")
+                    logger.warning(f"[crawl_notes] all methods failed for note_id={note_id}, URL may lack xsec_token")
                     failed += 1
             except CaptchaException:
                 raise
+            except ExecutorLeaseLost:
+                raise
             except Exception as exc:
-                utils.logger.warning(f"[crawl_notes] note_id={note_id} err={exc}")
+                logger.warning(
+                    f"[crawl_notes] note_id={note_id} err={redact_sensitive_text(exc)}"
+                )
                 failed += 1
 
             if progress_cb:
-                await _safe_call(progress_cb, f"Collected {done}/{total} notes, failed {failed}")
+                await _safe_call(
+                    progress_cb,
+                    f"Collected {done}/{total} notes, {total_comments} comments, failed {failed}",
+                    done,
+                    total_comments,
+                )
             await asyncio.sleep(random.uniform(config.CRAWLER_MIN_SLEEP_SEC, config.CRAWLER_MAX_SLEEP_SEC))
 
-        return {"notes_count": done, "failed_count": failed, "total_notes_in_db": done}
+        return {
+            "notes_count": done,
+            "comments_count": total_comments,
+            "failed_count": failed,
+            "total_notes_in_db": done,
+        }
 
     async def _fetch_note_via_browser(self, note_id: str, xsec_token: str = "", xsec_source: str = "pc_search") -> Optional[Dict]:
         """Navigate Playwright browser to the note page and extract note data via JS state."""
         if not self._page:
-            utils.logger.warning(f"[fetch_note_via_browser] no page available for note_id={note_id}")
+            logger.warning(f"[fetch_note_via_browser] no page available for note_id={note_id}")
             return None
         try:
             import json as _json
@@ -848,7 +942,7 @@ class XHSCrawlerEngine:
             else:
                 url = f"{self._index_url}/explore/{note_id}"
 
-            utils.logger.info(f"[fetch_note_via_browser] navigating to {url}")
+            logger.info(f"[fetch_note_via_browser] navigating note_id={note_id}")
             # domcontentloaded avoids hanging on SPA background network requests
             await self._before_request("detail")
             await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -863,13 +957,16 @@ class XHSCrawlerEngine:
                 await asyncio.sleep(3)
 
             actual_url = self._page.url
-            utils.logger.info(f"[fetch_note_via_browser] actual URL after nav: {actual_url}")
+            logger.info(
+                "[fetch_note_via_browser] actual URL after nav: "
+                f"{redact_sensitive_text(actual_url)}"
+            )
             if "captcha" in actual_url.lower() or "website-login/captcha" in actual_url:
                 raise CaptchaException(
                     f"Browser CAPTCHA detected for account {self.account_id}, URL: {actual_url}"
                 )
             if "/404" in actual_url or "error_code=300031" in actual_url:
-                utils.logger.warning(
+                logger.warning(
                     f"[fetch_note_via_browser] note_id={note_id} redirected to 404 鈥?"
                     "URL must include xsec_token (copy link from search results, not address bar)"
                 )
@@ -879,14 +976,14 @@ class XHSCrawlerEngine:
             state_str = await self._page.evaluate(
                 "() => typeof window.__INITIAL_STATE__ !== 'undefined' ? JSON.stringify(window.__INITIAL_STATE__) : null"
             )
-            utils.logger.info(f"[fetch_note_via_browser] state_str None={state_str is None}, len={len(state_str) if state_str else 0}")
+            logger.info(f"[fetch_note_via_browser] state_str None={state_str is None}, len={len(state_str) if state_str else 0}")
 
             if state_str:
                 raw = _json.loads(state_str)
                 state = humps.decamelize(raw)
-                utils.logger.info(f"[fetch_note_via_browser] state top-keys: {list(state.keys())}")
+                logger.info(f"[fetch_note_via_browser] state top-keys: {list(state.keys())}")
                 note_map = state.get("note", {}).get("note_detail_map", {})
-                utils.logger.info(f"[fetch_note_via_browser] note_map keys: {list(note_map.keys())}")
+                logger.info(f"[fetch_note_via_browser] note_map keys: {list(note_map.keys())}")
                 nd = None
                 if note_id in note_map:
                     nd = note_map[note_id].get("note")
@@ -897,24 +994,27 @@ class XHSCrawlerEngine:
                 if nd:
                     nd["note_id"] = nd.get("note_id") or note_id
                     nd.update({"xsec_token": xsec_token, "xsec_source": xsec_source})
-                    utils.logger.info(f"[fetch_note_via_browser] SUCCESS via JS state for {note_id}")
+                    logger.info(f"[fetch_note_via_browser] SUCCESS via JS state for {note_id}")
                     return nd
-                utils.logger.warning(f"[fetch_note_via_browser] note_id not found in note_map for {note_id}")
+                logger.warning(f"[fetch_note_via_browser] note_id not found in note_map for {note_id}")
 
             # Last resort: HTML parsing
             html = await self._page.content()
-            utils.logger.info(f"[fetch_note_via_browser] HTML len={len(html)}, has noteDetailMap={'noteDetailMap' in html}")
+            logger.info(f"[fetch_note_via_browser] HTML len={len(html)}, has noteDetailMap={'noteDetailMap' in html}")
             nd = self._xhs_client._extractor.extract_note_detail_from_html(note_id, html)
             if nd:
                 nd.update({"xsec_token": xsec_token, "xsec_source": xsec_source})
-                utils.logger.info(f"[fetch_note_via_browser] SUCCESS via HTML for {note_id}")
+                logger.info(f"[fetch_note_via_browser] SUCCESS via HTML for {note_id}")
             else:
-                utils.logger.warning(f"[fetch_note_via_browser] HTML extraction also failed for {note_id}")
+                logger.warning(f"[fetch_note_via_browser] HTML extraction also failed for {note_id}")
             return nd
         except CaptchaException:
             raise
         except Exception as exc:
-            utils.logger.warning(f"[fetch_note_via_browser] EXCEPTION note_id={note_id}: {exc}")
+            logger.warning(
+                f"[fetch_note_via_browser] EXCEPTION note_id={note_id}: "
+                f"{redact_sensitive_text(exc)}"
+            )
             return None
 
     async def get_qrcode_for_web(self) -> dict:
@@ -940,14 +1040,15 @@ class XHSCrawlerEngine:
             if not base64_img:
                 return {"error": "QR code not found; check whether the account is already logged in or the page loaded correctly."}
             current_cookies = await self._browser_context.cookies()
-            _, cookie_dict = utils.convert_cookies(current_cookies)
+            _, cookie_dict = convert_cookies(current_cookies)
             session_before = cookie_dict.get("web_session", "")
             self.status = "waiting_qrcode"
             self.message = "Waiting for QR login..."
             return {"qrcode": base64_img, "session_before": session_before}
         except Exception as exc:
-            utils.logger.error(f"[get_qrcode_for_web] {exc}")
-            return {"error": str(exc)}
+            safe_error = redact_sensitive_text(exc)
+            logger.error(f"[get_qrcode_for_web] {safe_error}")
+            return {"error": safe_error}
 
     async def check_qrcode_login_done(self, session_before: str) -> dict:
         """Poll whether QR code login completed. Returns {done, cookie} or {done:False}."""
@@ -962,7 +1063,7 @@ class XHSCrawlerEngine:
                 is_visible = False
             # Check cookie change
             current_cookies = await self._browser_context.cookies()
-            _, cookie_dict = utils.convert_cookies(current_cookies)
+            _, cookie_dict = convert_cookies(current_cookies)
             current_session = cookie_dict.get("web_session", "")
             logged_in = is_visible or (current_session and current_session != session_before)
             if logged_in:
@@ -972,7 +1073,10 @@ class XHSCrawlerEngine:
                     try:
                         verified = await self._xhs_client.pong()
                     except Exception as exc:
-                        utils.logger.warning(f"[check_qrcode_login_done] post-login pong failed: {exc}")
+                        logger.warning(
+                            "[check_qrcode_login_done] post-login pong failed: "
+                            f"{redact_sensitive_text(exc)}"
+                        )
                         return {
                             "done": True,
                             "verified": False,
@@ -991,7 +1095,9 @@ class XHSCrawlerEngine:
                     }
             return {"done": False}
         except Exception as exc:
-            utils.logger.warning(f"[check_qrcode_login_done] {exc}")
+            logger.warning(
+                f"[check_qrcode_login_done] {redact_sensitive_text(exc)}"
+            )
             return {"done": False}
 
 async def _load_existing_note_ids(field: str, value: str) -> set:
@@ -1013,5 +1119,7 @@ async def _safe_call(fn: Callable, *args):
         result = fn(*args)
         if asyncio.iscoroutine(result):
             await result
+    except ExecutorLeaseLost:
+        raise
     except Exception:
         pass

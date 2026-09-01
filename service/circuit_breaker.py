@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from config.settings import settings
+from tools.redaction import redact_sensitive_text
 from . import service_db as db
 
 RISK_EVENT_TYPES = ["captcha", "rate_limited", "auth_expired", "permission_denied", "account_error"]
@@ -42,7 +43,7 @@ class CrawlCircuitBreaker:
             account_id=account_id,
             task_id=task_id,
             error_type=event_type,
-            message=message,
+            message=redact_sensitive_text(message) if message is not None else None,
         )
         await self.evaluate()
 

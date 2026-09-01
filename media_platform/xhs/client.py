@@ -25,11 +25,13 @@ from urllib.parse import quote, urlencode
 import httpx
 from playwright.async_api import BrowserContext, Page
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_not_exception_type
+from tools.crawler_util import convert_browser_context_cookies
 from tools.httpx_util import make_async_client
+from tools.redaction import redact_sensitive_text
+from tools.utils import logger
 
 import config
 from base.base_crawler import AbstractApiClient
-from tools import utils
 
 from .exception import DataFetchError, IPBlockError, NoteNotFoundError
 from .field import SearchNoteType, SearchSortType
@@ -109,6 +111,8 @@ class XiaoHongShuClient(AbstractApiClient):
         status_code: Optional[int] = None,
         response_text: str = "",
     ) -> XHSRemoteError:
+        message = redact_sensitive_text(message)
+        response_text = redact_sensitive_text(response_text, max_length=1000)
         msg_lower = message.lower()
         if status_code in (461, 471) or "captcha" in msg_lower:
             return XHSCaptchaError(
@@ -228,7 +232,7 @@ class XiaoHongShuClient(AbstractApiClient):
                 if attempt >= 2:
                     raise
                 wait_for = min(8, 2 ** attempt)
-                utils.logger.warning(
+                logger.warning(
                     f"[XiaoHongShuClient.request] transient network error; "
                     f"retrying in {wait_for}s: {type(exc).__name__}"
                 )
@@ -240,12 +244,16 @@ class XiaoHongShuClient(AbstractApiClient):
             # someday someone maybe will bypass captcha
             verify_type = response.headers.get("Verifytype", "")
             verify_uuid = response.headers.get("Verifyuuid", "")
-            msg = f"CAPTCHA appeared, request failed, Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, Response: {response}"
-            utils.logger.error(msg)
+            msg = (
+                "CAPTCHA appeared, request failed, "
+                f"Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, "
+                f"status_code: {response.status_code}"
+            )
+            logger.error(msg)
             raise self._build_remote_error(
                 msg,
                 status_code=response.status_code,
-                response_text=response.text,
+                response_text="",
             )
 
         if return_response:
@@ -258,17 +266,19 @@ class XiaoHongShuClient(AbstractApiClient):
                 self.IP_ERROR_STR,
                 code=data.get("code"),
                 status_code=response.status_code,
-                response_text=response.text,
+                response_text="",
             )
         elif data.get("code") in (self.NOTE_NOT_FOUND_CODE, self.NOTE_ABNORMAL_CODE):
             raise NoteNotFoundError(f"Note not found or abnormal, code: {data.get('code')}")
         else:
-            err_msg = data.get("msg", None) or f"{response.text}"
+            err_msg = redact_sensitive_text(
+                data.get("msg", None) or "XHS request failed without an error message"
+            )
             raise self._build_remote_error(
                 err_msg,
                 code=data.get("code"),
                 status_code=response.status_code,
-                response_text=response.text,
+                response_text="",
             )
 
     @staticmethod
@@ -329,8 +339,9 @@ class XiaoHongShuClient(AbstractApiClient):
                 response = await client.request("GET", url, timeout=self.timeout)
                 response.raise_for_status()
                 if not response.reason_phrase == "OK":
-                    utils.logger.error(
-                        f"[XiaoHongShuClient.get_note_media] request {url} err, res:{response.text}"
+                    logger.error(
+                        "[XiaoHongShuClient.get_note_media] request failed "
+                        f"url={redact_sensitive_text(url)} status={response.status_code}"
                     )
                     return None
                 else:
@@ -338,8 +349,10 @@ class XiaoHongShuClient(AbstractApiClient):
             except (
                 httpx.HTTPError
             ) as exc:  # some wrong when call httpx.request method, such as connection error, client error, server error or response status code is not 2xx
-                utils.logger.error(
-                    f"[XiaoHongShuClient.get_aweme_media] {exc.__class__.__name__} for {exc.request.url} - {exc}"
+                logger.error(
+                    f"[XiaoHongShuClient.get_aweme_media] {exc.__class__.__name__} "
+                    f"for {redact_sensitive_text(exc.request.url)} - "
+                    f"{redact_sensitive_text(exc)}"
                 )  # Keep original exception type name for developer debugging
                 return None
 
@@ -366,18 +379,19 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
             bool: True if logged in, False otherwise
         """
-        utils.logger.info("[XiaoHongShuClient.pong] Begin to check login state...")
+        logger.info("[XiaoHongShuClient.pong] Begin to check login state...")
         ping_flag = False
         try:
             self_info: Dict = await self.query_self()
             if self_info and self_info.get("data", {}).get("result", {}).get("success"):
                 ping_flag = True
         except Exception as e:
-            utils.logger.error(
-                f"[XiaoHongShuClient.pong] Check login state failed: {e}, and try to login again..."
+            logger.error(
+                "[XiaoHongShuClient.pong] Check login state failed: "
+                f"{redact_sensitive_text(e)}, and try to login again..."
             )
             ping_flag = False
-        utils.logger.info(f"[XiaoHongShuClient.pong] Login state result: {ping_flag}")
+        logger.info(f"[XiaoHongShuClient.pong] Login state result: {ping_flag}")
         return ping_flag
 
     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
@@ -389,7 +403,7 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
 
         """
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+        cookie_str, cookie_dict = await convert_browser_context_cookies(
             browser_context,
             urls=urls or self.cookie_urls,
         )
@@ -462,14 +476,15 @@ class XiaoHongShuClient(AbstractApiClient):
                 note_card = first_item.get("note_card")
                 if isinstance(note_card, dict):
                     return note_card
-                utils.logger.warning(
+                logger.warning(
                     "[XiaoHongShuClient.get_note_by_id] note_card missing "
                     f"for note id:{note_id}, item keys:{list(first_item.keys())}"
                 )
                 return dict()
         # When crawling frequently, some notes may have results while others don't
-        utils.logger.error(
-            f"[XiaoHongShuClient.get_note_by_id] get note id:{note_id} empty and res:{res}"
+        logger.error(
+            f"[XiaoHongShuClient.get_note_by_id] get note id:{note_id} empty; "
+            f"response keys:{list(res.keys()) if isinstance(res, dict) else []}"
         )
         return dict()
 
@@ -538,6 +553,7 @@ class XiaoHongShuClient(AbstractApiClient):
         crawl_interval: float = 1.0,
         callback: Optional[Callable] = None,
         max_count: int = 10,
+        include_sub_comments: Optional[bool] = None,
     ) -> List[Dict]:
         """
         Get all first-level comments under specified note, this method will continuously find all comment information under a post
@@ -560,8 +576,9 @@ class XiaoHongShuClient(AbstractApiClient):
             comments_has_more = comments_res.get("has_more", False)
             comments_cursor = comments_res.get("cursor", "")
             if "comments" not in comments_res:
-                utils.logger.info(
-                    f"[XiaoHongShuClient.get_note_all_comments] No 'comments' key found in response: {comments_res}"
+                logger.info(
+                    "[XiaoHongShuClient.get_note_all_comments] No 'comments' key "
+                    f"found; response keys:{list(comments_res.keys())}"
                 )
                 break
             comments = comments_res["comments"]
@@ -571,13 +588,20 @@ class XiaoHongShuClient(AbstractApiClient):
                 await callback(note_id, comments)
             await asyncio.sleep(crawl_interval)
             result.extend(comments)
-            sub_comments = await self.get_comments_all_sub_comments(
-                comments=comments,
-                xsec_token=xsec_token,
-                crawl_interval=crawl_interval,
-                callback=callback,
+            should_include_sub_comments = (
+                config.ENABLE_GET_SUB_COMMENTS
+                if include_sub_comments is None
+                else include_sub_comments
             )
-            result.extend(sub_comments)
+            if should_include_sub_comments:
+                sub_comments = await self.get_comments_all_sub_comments(
+                    comments=comments,
+                    xsec_token=xsec_token,
+                    crawl_interval=crawl_interval,
+                    callback=callback,
+                    force=include_sub_comments is True,
+                )
+                result.extend(sub_comments)
         return result
 
     async def get_comments_all_sub_comments(
@@ -586,6 +610,7 @@ class XiaoHongShuClient(AbstractApiClient):
         xsec_token: str,
         crawl_interval: float = 1.0,
         callback: Optional[Callable] = None,
+        force: bool = False,
     ) -> List[Dict]:
         """
         Get all second-level comments under specified first-level comments, this method will continuously find all second-level comment information under first-level comments
@@ -598,8 +623,8 @@ class XiaoHongShuClient(AbstractApiClient):
         Returns:
 
         """
-        if not config.ENABLE_GET_SUB_COMMENTS:
-            utils.logger.info(
+        if not force and not config.ENABLE_GET_SUB_COMMENTS:
+            logger.info(
                 f"[XiaoHongShuCrawler.get_comments_all_sub_comments] Crawling sub_comment mode is not enabled"
             )
             return []
@@ -609,8 +634,10 @@ class XiaoHongShuClient(AbstractApiClient):
             try:
                 note_id = comment.get("note_id")
                 sub_comments = comment.get("sub_comments")
-                if sub_comments and callback:
-                    await callback(note_id, sub_comments)
+                if sub_comments:
+                    if callback:
+                        await callback(note_id, sub_comments)
+                    result.extend(sub_comments)
 
                 sub_comment_has_more = comment.get("sub_comment_has_more")
                 if not sub_comment_has_more:
@@ -630,15 +657,17 @@ class XiaoHongShuClient(AbstractApiClient):
                         )
 
                         if comments_res is None:
-                            utils.logger.info(
+                            logger.info(
                                 f"[XiaoHongShuClient.get_comments_all_sub_comments] No response found for note_id: {note_id}"
                             )
                             break
                         sub_comment_has_more = comments_res.get("has_more", False)
                         sub_comment_cursor = comments_res.get("cursor", "")
                         if "comments" not in comments_res:
-                            utils.logger.info(
-                                f"[XiaoHongShuClient.get_comments_all_sub_comments] No 'comments' key found in response: {comments_res}"
+                            logger.info(
+                                "[XiaoHongShuClient.get_comments_all_sub_comments] "
+                                "No 'comments' key found; response keys:"
+                                f"{list(comments_res.keys())}"
                             )
                             break
                         comments = comments_res["comments"]
@@ -647,18 +676,24 @@ class XiaoHongShuClient(AbstractApiClient):
                         await asyncio.sleep(crawl_interval)
                         result.extend(comments)
                     except DataFetchError as e:
-                        utils.logger.warning(
-                            f"[XiaoHongShuClient.get_comments_all_sub_comments] Failed to get sub-comments for note_id: {note_id}, root_comment_id: {root_comment_id}, error: {e}. Skipping this comment's sub-comments."
+                        logger.warning(
+                            "[XiaoHongShuClient.get_comments_all_sub_comments] "
+                            f"Failed for note_id:{note_id}, root_comment_id:{root_comment_id}, "
+                            f"error:{redact_sensitive_text(e)}. Skipping this comment's sub-comments."
                         )
                         break  # Break out of the sub-comment acquisition loop of the current comment and continue processing the next comment
                     except Exception as e:
-                        utils.logger.error(
-                            f"[XiaoHongShuClient.get_comments_all_sub_comments] Unexpected error when getting sub-comments for note_id: {note_id}, root_comment_id: {root_comment_id}, error: {e}"
+                        logger.error(
+                            "[XiaoHongShuClient.get_comments_all_sub_comments] "
+                            f"Unexpected error for note_id:{note_id}, root_comment_id:{root_comment_id}, "
+                            f"error:{redact_sensitive_text(e)}"
                         )
                         break
             except Exception as e:
-                utils.logger.error(
-                    f"[XiaoHongShuClient.get_comments_all_sub_comments] Error processing comment: {comment.get('id', 'unknown')}, error: {e}. Continuing with next comment."
+                logger.error(
+                    "[XiaoHongShuClient.get_comments_all_sub_comments] Error processing "
+                    f"comment:{comment.get('id', 'unknown')}, "
+                    f"error:{redact_sensitive_text(e)}. Continuing with next comment."
                 )
                 continue  # Continue to next comment
         return result
@@ -747,7 +782,7 @@ class XiaoHongShuClient(AbstractApiClient):
                 user_id, notes_cursor, xsec_token=xsec_token, xsec_source=xsec_source
             )
             if not notes_res:
-                utils.logger.error(
+                logger.error(
                     f"[XiaoHongShuClient.get_notes_by_creator] The current creator may have been banned by xhs, so they cannot access the data."
                 )
                 break
@@ -755,13 +790,14 @@ class XiaoHongShuClient(AbstractApiClient):
             notes_has_more = notes_res.get("has_more", False)
             notes_cursor = notes_res.get("cursor", "")
             if "notes" not in notes_res:
-                utils.logger.info(
-                    f"[XiaoHongShuClient.get_all_notes_by_creator] No 'notes' key found in response: {notes_res}"
+                logger.info(
+                    "[XiaoHongShuClient.get_all_notes_by_creator] No 'notes' key "
+                    f"found; response keys:{list(notes_res.keys())}"
                 )
                 break
 
             notes = notes_res["notes"]
-            utils.logger.info(
+            logger.info(
                 f"[XiaoHongShuClient.get_all_notes_by_creator] got user_id:{user_id} notes len : {len(notes)}"
             )
 
@@ -776,7 +812,7 @@ class XiaoHongShuClient(AbstractApiClient):
             result.extend(notes_to_add)
             await asyncio.sleep(crawl_interval)
 
-        utils.logger.info(
+        logger.info(
             f"[XiaoHongShuClient.get_all_notes_by_creator] Finished getting notes for user {user_id}, total: {len(result)}"
         )
         return result

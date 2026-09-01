@@ -14,5 +14,3 @@ Read these files in order when taking over the project:
 10. `ai-change-guide.md`: rules for future AI coding agents.
 
 Operational scripts and deployment notes live in `../ops/README.md`.
-
-Do not use `_backup_before_cleanup_*/` as active context unless explicitly asked.

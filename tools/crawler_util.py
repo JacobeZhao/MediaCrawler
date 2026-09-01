@@ -36,8 +36,9 @@ import httpx
 from PIL import Image, ImageDraw, ImageShow
 from playwright.async_api import BrowserContext, Cookie, Page
 
-from . import utils
 from .httpx_util import make_async_client
+from .redaction import redact_sensitive_text
+from .utils import logger
 
 
 async def find_login_qrcode(page: Page, selector: str) -> str:
@@ -49,17 +50,19 @@ async def find_login_qrcode(page: Page, selector: str) -> str:
         login_qrcode_img = str(await elements.get_property("src"))  # type: ignore
         if "http://" in login_qrcode_img or "https://" in login_qrcode_img:
             async with make_async_client(follow_redirects=True) as client:
-                utils.logger.info(f"[find_login_qrcode] get qrcode by url:{login_qrcode_img}")
+                logger.info("[find_login_qrcode] fetching remote QR image")
                 resp = await client.get(login_qrcode_img, headers={"User-Agent": get_user_agent()})
                 if resp.status_code == 200:
                     image_data = resp.content
                     base64_image = base64.b64encode(image_data).decode('utf-8')
                     return base64_image
-                raise Exception(f"fetch login image url failed, response message:{resp.text}")
+                raise RuntimeError(
+                    f"fetch login image failed with status {resp.status_code}"
+                )
         return login_qrcode_img
 
-    except Exception as e:
-        print(e)
+    except Exception as exc:
+        logger.warning(f"[find_login_qrcode] {redact_sensitive_text(exc)}")
         return ""
 
 

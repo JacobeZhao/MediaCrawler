@@ -10,7 +10,8 @@ from enum import Enum
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from tools import utils
+from tools.utils import logger
+from tools.redaction import redact_sensitive_text
 from config.settings import settings
 from . import service_db as sdb
 from .crawler_engine import XHSCrawlerEngine
@@ -143,9 +144,9 @@ class AccountPool:
                     captcha_count=await self._increment_captcha_count(acc_id),
                     last_checked=datetime.now().isoformat(),
                 )
-                utils.logger.warning(f"[AccountPool] account_id={acc_id} marked captcha")
+                logger.warning(f"[AccountPool] account_id={acc_id} marked captcha")
                 return
-        utils.logger.warning("[AccountPool] default engine marked captcha")
+        logger.warning("[AccountPool] default engine marked captcha")
 
     async def mark_temporarily_unavailable(
         self, engine: XHSCrawlerEngine, duration: Optional[int] = None
@@ -161,7 +162,7 @@ class AccountPool:
                 status=sdb.AccountStatus.COOLING_DOWN,
                 last_checked=datetime.now().isoformat(),
             )
-        utils.logger.warning(
+        logger.warning(
             f"[AccountPool] engine account_id={engine.account_id} "
             f"cooling down for {duration}s"
         )
@@ -300,7 +301,9 @@ class AccountPool:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                utils.logger.warning(f"[AccountPool] rotation_loop error: {exc}")
+                logger.warning(
+                    f"[AccountPool] rotation_loop error: {redact_sensitive_text(exc)}"
+                )
 
     async def _health_loop(self):
         """Periodically ping all pool engines and recover cooled-down ones."""
@@ -312,7 +315,9 @@ class AccountPool:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                utils.logger.warning(f"[AccountPool] health_loop error: {exc}")
+                logger.warning(
+                    f"[AccountPool] health_loop error: {redact_sensitive_text(exc)}"
+                )
 
     def _rebuild_engine_list(self):
         self._engine_list = list(self._pool.values())
@@ -324,7 +329,7 @@ class AccountPool:
             return
         self._current_index = (self._current_index + 1) % n
         eng = self._engine_list[self._current_index]
-        utils.logger.info(
+        logger.info(
             f"[AccountPool] rotating to engine index={self._current_index} "
             f"account_id={eng.account_id} status={eng.status}"
         )
@@ -339,7 +344,7 @@ class AccountPool:
                     eng.status = EngineStatus.COOLING_DOWN.value
                     eng.message = "cooldown finished; health check pending"
                     del self._cool_until[eid]
-                    utils.logger.info(
+                    logger.info(
                         f"[AccountPool] engine account_id={eng.account_id} "
                         "cooldown finished; awaiting health check"
                     )
@@ -362,12 +367,12 @@ class AccountPool:
         os.makedirs(user_data_dir, exist_ok=True)
         proxy_profile = await sdb.get_proxy_profile(proxy_id, include_secret=True)
         if proxy_id and not proxy_profile:
-            utils.logger.warning(
+            logger.warning(
                 f"[AccountPool] account_id={account_id} proxy_id={proxy_id} not found; skip engine startup"
             )
             return False
         if proxy_profile and proxy_profile.get("status") != "active":
-            utils.logger.warning(
+            logger.warning(
                 f"[AccountPool] account_id={account_id} proxy_id={proxy_id} inactive; skip engine startup"
             )
             return False
@@ -388,11 +393,11 @@ class AccountPool:
             if ok:
                 async with self._lock:
                     self._pool[account_id] = eng
-                utils.logger.info(
+                logger.info(
                     f"[AccountPool] account_id={account_id} name={name!r} loaded into pool"
                 )
                 return True
-            utils.logger.warning(
+            logger.warning(
                 f"[AccountPool] account_id={account_id} cookie invalid, not adding to pool"
             )
             await sdb.update_account(
@@ -403,7 +408,10 @@ class AccountPool:
             await eng.stop()
             return False
         except Exception as exc:
-            utils.logger.error(f"[AccountPool] account_id={account_id} start failed: {exc}")
+            logger.error(
+                f"[AccountPool] account_id={account_id} start failed: "
+                f"{redact_sensitive_text(exc)}"
+            )
             try:
                 await eng.stop()
             except Exception:

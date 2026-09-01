@@ -123,9 +123,3 @@ def rfc2822_to_timestamp(rfc2822_time):
     timestamp = int(dt_utc.timestamp())
 
     return timestamp
-
-
-if __name__ == '__main__':
-    # Example usage
-    _rfc2822_time = "Sat Dec 23 17:12:54 +0800 2023"
-    print(rfc2822_to_china_datetime(_rfc2822_time))

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Dict, Mapping, Optional, Protocol
-from urllib.parse import parse_qs, urlparse
 
 from config.settings import settings
 from store.xhs import XhsStoreFactory
@@ -1008,10 +1007,3 @@ class JustOneApiTaskExecutor(TaskExecutor):
             return int(value)
         except (TypeError, ValueError):
             return default
-
-    @staticmethod
-    def _xsec_token(value: str) -> Optional[str]:
-        try:
-            return parse_qs(urlparse(value).query).get("xsec_token", [None])[0]
-        except ValueError:
-            return None

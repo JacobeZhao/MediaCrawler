@@ -30,13 +30,28 @@
     return text.length > length ? `${text.slice(0, length)}...` : text;
   };
 
+  function apiErrorMessage(detail) {
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail.map(item => {
+        if (!item || typeof item !== "object") return String(item);
+        const location = Array.isArray(item.loc) ? item.loc.join(".") : "";
+        return `${location ? `${location}: ` : ""}${item.msg || JSON.stringify(item)}`;
+      }).join("; ");
+    }
+    if (detail && typeof detail === "object") {
+      return detail.message || JSON.stringify(detail);
+    }
+    return String(detail || "");
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(apiUrl(path), options);
     if (!response.ok) {
       let message = response.statusText || `HTTP ${response.status}`;
       try {
         const body = await response.json();
-        message = body.detail || body.message || JSON.stringify(body);
+        message = apiErrorMessage(body.detail ?? body.message ?? body);
       } catch (_) {}
       throw new Error(message);
     }
@@ -371,7 +386,8 @@
       const message = prog.message || task.progress || task.error || "";
       const updated = prog.updated_at || task.heartbeat_at || task.completed_at || task.started_at || task.created_at;
       const selected = Number(state.selectedTaskId) === Number(task.id) ? " selected" : "";
-      const canRun = !["pending", "running"].includes(task.status) && task.task_type !== "note";
+      const canResume = !["pending", "running"].includes(task.status);
+      const canRecrawl = canResume && task.task_type !== "note";
       const source = taskKeyword(task);
       const provider = taskProvider(task);
       return `
@@ -396,7 +412,8 @@
           <td>
             <div class="row">
               <button class="btn ghost small" data-view-id="${task.id}">查看</button>
-              ${canRun ? `<button class="btn ghost small" data-resume-id="${task.id}">续爬</button><button class="btn danger small" data-recrawl-id="${task.id}">重爬</button>` : ""}
+              ${canResume ? `<button class="btn ghost small" data-resume-id="${task.id}">续爬</button>` : ""}
+              ${canRecrawl ? `<button class="btn danger small" data-recrawl-id="${task.id}">重爬</button>` : ""}
             </div>
           </td>
         </tr>
@@ -456,6 +473,14 @@
     const result = await json(path, { method: "POST", headers: headers(), body: JSON.stringify(payload) });
     await refreshAll();
     alert(result.message || "提交成功");
+  }
+
+  async function submitTask(path, payload) {
+    try {
+      await submitJson(path, payload);
+    } catch (error) {
+      alert(`任务提交失败：${error.message || error}`);
+    }
   }
 
   function formData(form) {
@@ -803,7 +828,7 @@
     $("searchSingleForm").addEventListener("submit", async event => {
       event.preventDefault();
       const data = formData(event.target);
-      await submitJson("/api/tasks/search", {
+      await submitTask("/api/tasks/search", {
         ...providerPayload(),
         keyword: data.keyword.trim(),
         max_notes: Number(data.max_notes),
@@ -818,7 +843,7 @@
       const data = formData(event.target);
       const keywords = lines(data.keywords);
       if (!keywords.length) return alert("请输入至少一个关键词");
-      await submitJson("/api/tasks/batch_search", {
+      await submitTask("/api/tasks/batch_search", {
         ...providerPayload(),
         keywords,
         max_notes: Number(data.max_notes),
@@ -830,7 +855,7 @@
     $("creatorSingleForm").addEventListener("submit", async event => {
       event.preventDefault();
       const data = formData(event.target);
-      await submitJson("/api/tasks/creator", {
+      await submitTask("/api/tasks/creator", {
         ...providerPayload(),
         creator_input: data.creator_input.trim(),
         max_notes: Number(data.max_notes),
@@ -842,7 +867,7 @@
       const data = formData(event.target);
       const creator_urls = lines(data.creator_urls);
       if (!creator_urls.length) return alert("请输入至少一个博主主页或用户 ID");
-      await submitJson("/api/tasks/batch_creator", {
+      await submitTask("/api/tasks/batch_creator", {
         ...providerPayload(),
         creator_urls,
         max_notes: Number(data.max_notes),
@@ -853,7 +878,7 @@
       const data = formData(event.target);
       const note_input = String(data.note_input || "").trim();
       if (!note_input) return alert("请输入笔记链接或 ID");
-      await submitJson("/api/tasks/note", {
+      await submitTask("/api/tasks/note", {
         ...providerPayload(),
         notes: [{
           note_input,
@@ -871,7 +896,7 @@
         quality: data.quality,
       }));
       if (!notes.length) return alert("请输入至少一个笔记链接或 ID");
-      await submitJson("/api/tasks/note", { ...providerPayload(), notes });
+      await submitTask("/api/tasks/note", { ...providerPayload(), notes });
     });
   }
 

@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from config.settings import settings
-from database.db_session import create_tables
+from database.db_session import create_tables, dispose_engines
 
 from . import service_db as sdb
 from .dependencies import (
@@ -20,6 +20,7 @@ from .dependencies import (
     engine,
     justoneapi_client,
     pool,
+    qr_sessions,
     task_manager,
 )
 from .routes import accounts, export, login, notes, proxies, status, tasks
@@ -41,11 +42,27 @@ async def lifespan(app: FastAPI):
         await task_manager.start()
         yield
     finally:
-        await task_manager.stop()
-        await justoneapi_client.aclose()
-        await pool.stop()
-        await engine.stop()
-        runtime_lock.release()
+        cleanup_error = None
+        for cleanup in (
+            task_manager.stop,
+            justoneapi_client.aclose,
+            qr_sessions.close_all,
+            pool.stop,
+            engine.stop,
+            dispose_engines,
+        ):
+            try:
+                await cleanup()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        try:
+            runtime_lock.release()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def create_app() -> FastAPI:

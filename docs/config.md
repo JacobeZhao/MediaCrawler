@@ -75,9 +75,8 @@ Runtime paths:
 
 - `.venv/`
 - `data/`
-- `data_archive/`
 - `browser_data/`
-- `archive/`
+- `exports/`
 - `logs/`
 - `database/*.db`
 - `service/*.db`

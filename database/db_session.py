@@ -36,6 +36,14 @@ def get_async_engine(db_type: str = None):
     return _engines[db_type]
 
 
+async def dispose_engines() -> None:
+    engines = list(_engines.values())
+    _engines.clear()
+    _initialized_schema_engines.clear()
+    for engine in engines:
+        await engine.dispose()
+
+
 async def create_tables(db_type: str = None):
     engine = get_async_engine(db_type or "sqlite")
     if engine in _initialized_schema_engines:

@@ -106,3 +106,21 @@ class NoteItem(BaseModel):
 
 class NoteTaskRequest(ProviderTaskRequest):
     notes: List[NoteItem] = Field(min_length=1, max_length=200)
+    max_comments: int = Field(default=0, ge=0, le=10000)
+    include_replies: bool = False
+
+    @model_validator(mode="after")
+    def validate_comment_scope(self):
+        if self.include_replies and self.max_comments == 0:
+            raise ValueError("include_replies requires max_comments greater than zero")
+        if (
+            self.provider == "justoneapi"
+            and self.provider_options
+            and self.provider_options.include_comments
+            and "max_comments" in self.model_fields_set
+            and self.max_comments == 0
+        ):
+            raise ValueError(
+                "max_comments must be greater than zero when include_comments is enabled"
+            )
+        return self

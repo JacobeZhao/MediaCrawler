@@ -4,8 +4,7 @@ This guide is for future AI or human maintainers.
 
 ## Hard Rules
 
-- Do not read, search, import, copy, modify, or delete `_backup_before_cleanup_20260625_102946/` unless the user explicitly asks.
-- Do not treat `browser_data/`, `data/`, `archive/`, `*.db`, or `*.log` as source code.
+- Do not treat `browser_data/`, `data/`, `exports/`, `*.db`, or `*.log` as source code.
 - Keep the service single-process unless the runtime model is redesigned.
 - Run `python -m compileall service config media_platform store database tools base cache model start_xhs_service.py` after Python changes.
 - Do not rewrite `service/crawler_engine.py` in one pass. It is the highest-risk module.

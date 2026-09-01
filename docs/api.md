@@ -117,6 +117,8 @@ schedules, subscriptions, or recurring collection jobs.
 ## Notes and Export
 
 - `GET /api/notes`: query saved notes with bounded `limit`.
+- `GET /api/notes/{note_id}/comments`: list saved comments and replies with a
+  bounded `limit`.
 - `GET /api/notes/{note_id}/images`: list local images for a validated note id.
 - `GET /api/export/notes`: export saved note/comment data.
 

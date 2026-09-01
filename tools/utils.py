@@ -21,9 +21,6 @@
 import argparse
 import logging
 
-from .crawler_util import *
-from .time_util import *
-
 
 def init_logging_config():
     level = logging.INFO

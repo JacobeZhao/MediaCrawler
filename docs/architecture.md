@@ -5,8 +5,6 @@ for one local Windows host, one uvicorn process, and local SQLite. Its default `
 task provider uses Playwright browser profiles; the optional `justoneapi` provider
 uses an outbound HTTP API instead.
 
-Do not use `_backup_before_cleanup_20260625_102946/` for development.
-
 ## Runtime Flow
 
 ```text

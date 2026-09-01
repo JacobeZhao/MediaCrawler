@@ -18,7 +18,7 @@ dependency. FastAPI serves it from `service/static/`.
 - Account panel: account health summary, account rows, health check, cookie
   import, QR login.
 - Create task panel: tabbed forms for search, batch search, creator, and notes.
-- Data preview: selected task notes, note detail, images, and comments.
+- Task selection: selecting a task row highlights it for operator context.
 
 ## API Configuration
 

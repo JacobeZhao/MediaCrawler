@@ -33,6 +33,33 @@ class _TemporaryDatabaseTest(unittest.IsolatedAsyncioTestCase):
         self._temp_dir.cleanup()
 
 
+class DatabaseEngineLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dispose_engines_releases_and_clears_cached_engines(self):
+        class FakeEngine:
+            disposed = False
+
+            async def dispose(self):
+                self.disposed = True
+
+        previous_engines = dict(db_session._engines)
+        previous_initialized = list(db_session._initialized_schema_engines)
+        db_session._engines.clear()
+        db_session._initialized_schema_engines.clear()
+        try:
+            engine = FakeEngine()
+            db_session._engines["test"] = engine
+            db_session._initialized_schema_engines.add(engine)
+
+            await db_session.dispose_engines()
+
+            self.assertTrue(engine.disposed)
+            self.assertEqual({}, db_session._engines)
+            self.assertNotIn(engine, db_session._initialized_schema_engines)
+        finally:
+            db_session._engines.update(previous_engines)
+            db_session._initialized_schema_engines.update(previous_initialized)
+
+
 class ContentRepositoryTests(_TemporaryDatabaseTest):
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -170,23 +197,32 @@ class ContentRepositoryTests(_TemporaryDatabaseTest):
     async def test_legacy_nested_store_entrypoint_remains_compatible(self):
         keyword_token = source_keyword_var.set("legacy-keyword")
         try:
-            await xhs_store.update_xhs_note(
-                {
-                    "note_id": "legacy-note",
-                    "type": "normal",
-                    "title": "legacy title",
-                    "desc": "legacy description",
-                    "time": 1700000000000,
-                    "last_update_time": 1700000000001,
-                    "user": {"user_id": "legacy-user", "nickname": "legacy creator"},
-                    "interact_info": {"liked_count": 1, "comment_count": 2},
-                    "image_list": [{"url_default": "https://img/legacy.jpg"}],
-                    "tag_list": [{"type": "topic", "name": "legacy"}],
-                    "xsec_token": "legacy-token",
-                }
-            )
+            with self.assertLogs("MediaCrawler", level="INFO") as captured:
+                await xhs_store.update_xhs_note(
+                    {
+                        "note_id": "legacy-note",
+                        "type": "normal",
+                        "title": "legacy title",
+                        "desc": "legacy description",
+                        "time": 1700000000000,
+                        "last_update_time": 1700000000001,
+                        "user": {
+                            "user_id": "legacy-user",
+                            "nickname": "legacy creator",
+                        },
+                        "interact_info": {"liked_count": 1, "comment_count": 2},
+                        "image_list": [{"url_default": "https://img/legacy.jpg"}],
+                        "tag_list": [{"type": "topic", "name": "legacy"}],
+                        "xsec_token": "legacy-token",
+                    }
+                )
         finally:
             source_keyword_var.reset(keyword_token)
+
+        rendered_logs = "\n".join(captured.output)
+        self.assertIn("note_id=legacy-note", rendered_logs)
+        self.assertNotIn("legacy-token", rendered_logs)
+        self.assertNotIn("legacy description", rendered_logs)
 
         async with db_session.get_session() as session:
             note = await session.scalar(

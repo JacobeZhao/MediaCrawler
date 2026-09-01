@@ -123,15 +123,3 @@ class ExpiringLocalCache:
         while True:
             self._clear()
             await asyncio.sleep(self._cron_interval)
-
-
-if __name__ == '__main__':
-    cache = ExpiringLocalCache(cron_interval=2)
-    cache.set('name', 'Programmer AJiang-Relakkes', 3)
-    print(cache.get('key'))
-    print(cache.keys("*"))
-    time.sleep(4)
-    print(cache.get('key'))
-    del cache
-    time.sleep(1)
-    print("done")

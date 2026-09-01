@@ -51,6 +51,12 @@ class RotatingBinaryWriterTest(unittest.TestCase):
                 ):
                     load_supervisor_config(environ=environ)
 
+    def test_supervisor_rejects_negative_restart_delay(self):
+        with self.assertRaisesRegex(ValueError, "nonnegative integer"):
+            load_supervisor_config(
+                environ={"XHS_RESTART_DELAY_SECONDS": "-1"},
+            )
+
     def test_rotates_large_write_and_keeps_only_configured_backups(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             log_path = Path(temp_dir) / "service.log"

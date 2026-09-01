@@ -12,6 +12,8 @@ from pydantic import ValidationError
 from service.schemas.tasks import (
     BatchSearchTaskRequest,
     JustOneApiOptions,
+    NoteItem,
+    NoteTaskRequest,
     SearchTaskRequest,
 )
 from service.services.task_service import TaskService
@@ -108,6 +110,70 @@ class TaskServiceProviderTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIn("missing_token", str(raised.exception.detail))
+
+    async def test_note_task_stores_comment_limit(self):
+        manager = FakeTaskManager(
+            {"local": ProviderReadiness(enabled=True, ready=True)}
+        )
+        service = TaskService(manager)
+
+        response = await service.create_note_task(
+            NoteTaskRequest(
+                notes=[
+                    NoteItem(
+                        note_input="6a86768b0000000023001225",
+                        d_level="D2",
+                        quality="single-note-comments",
+                    )
+                ],
+                max_comments=10000,
+                include_replies=True,
+            )
+        )
+
+        task = await db.get_task(response["task_id"])
+        params = json.loads(task["params"])
+        self.assertEqual(params["max_comments"], 10000)
+        self.assertTrue(params["include_replies"])
+
+    async def test_note_task_omits_provider_specific_comment_default(self):
+        manager = FakeTaskManager(
+            {
+                "local": ProviderReadiness(enabled=True, ready=True),
+                "justoneapi": ProviderReadiness(enabled=True, ready=True),
+            }
+        )
+        service = TaskService(manager)
+        note = NoteItem(note_input="note-1", d_level="D1", quality="A")
+
+        local_response = await service.create_note_task(NoteTaskRequest(notes=[note]))
+        api_response = await service.create_note_task(
+            NoteTaskRequest(
+                notes=[note],
+                provider="justoneapi",
+                provider_options=JustOneApiOptions(include_comments=True),
+            )
+        )
+
+        local_task = await db.get_task(local_response["task_id"])
+        api_task = await db.get_task(api_response["task_id"])
+        self.assertNotIn("max_comments", json.loads(local_task["params"]))
+        self.assertNotIn("max_comments", json.loads(api_task["params"]))
+
+    def test_note_task_rejects_zero_limit_for_enabled_comments(self):
+        with self.assertRaises(ValidationError):
+            NoteTaskRequest(
+                notes=[NoteItem(note_input="note-1", d_level="D1", quality="A")],
+                provider="justoneapi",
+                provider_options=JustOneApiOptions(include_comments=True),
+                max_comments=0,
+            )
+
+        with self.assertRaises(ValidationError):
+            NoteTaskRequest(
+                notes=[NoteItem(note_input="note-1", d_level="D1", quality="A")],
+                include_replies=True,
+            )
 
     async def test_higher_budget_resubmission_resumes_manual_pause(self):
         manager = FakeTaskManager(

@@ -5,11 +5,9 @@ should not inspect them unless explicitly asked for a runtime incident:
 
 - `.venv/`
 - `data/`
-- `data_archive/`
 - `browser_data/`
-- `archive/`
+- `exports/`
 - `logs/`
-- `_backup_before_cleanup_*/`
 
 `data/private/` may contain account workbooks or other sensitive local inputs.
 Do not quote or summarize its contents in normal code work.
