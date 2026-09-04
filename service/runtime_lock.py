@@ -14,10 +14,7 @@ class RuntimeLock:
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
         self._handle = open(self._path, "a+", encoding="utf-8")
         try:
-            import msvcrt
-
-            self._handle.seek(0)
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            self._lock()
         except OSError as exc:
             self._handle.close()
             self._handle = None
@@ -33,10 +30,29 @@ class RuntimeLock:
         if not self._handle:
             return
         try:
-            import msvcrt
-
-            self._handle.seek(0)
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            self._unlock()
         finally:
             self._handle.close()
             self._handle = None
+
+    def _lock(self):
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        import fcntl
+
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(self):
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+        import fcntl
+
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)

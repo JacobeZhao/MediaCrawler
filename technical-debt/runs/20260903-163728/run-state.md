@@ -1,0 +1,65 @@
+# Technical Debt Cleanup Run State
+
+- Run: `20260903-163728`
+- Workflow state: `cycle_planning`
+- Repository root: `E:/project/MediaCrawler`
+- Baseline revision: `f7f99aeff476c3cbe2959cbc69130a02918c57ce`
+- Branch: `dev`
+- Scope: the repository root, excluding classified generated, protected, runtime-state, IDE, environment, and nested-repository content
+- Durable location decision: migrated to the updated workflow's fixed root `technical-debt/runs/20260903-163728/`; `technical-debt/index.md` is the canonical entry point
+- Staged paths: none
+- User-owned modified paths: `service/runtime_lock.py`, `service/static/app.js`, `service/static/index.html`, `service/static/styles.css`
+- Run-owned paths: `.env.example`, `docs/config.md`, `docs/testing.md`, `docs/ai-change-guide.md`, `requirements.txt`, `tools/README.md`, sixteen accepted new source/test/tool paths (including `tools/verify.py`), account-repository production hunks, and `technical-debt/**`
+- Protected metadata-only paths: `.env`, `RUNTIME_DO_NOT_READ.md`, runtime databases, browser profiles, exports, uploads/backups if discovered, credentials, and secret-bearing environment content
+- Generated/excluded metadata-only roots: `.git/`, `.idea/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`, `node_modules/`, `dist/`, `build/`, runtime `data/`, `browser_data/`, and `exports/`; tracked root `cache/` is active source and included
+- Command boundary: local read-only inspection, run-owned documentation writes, approved repository-local reversible cleanup, and hermetic verification only
+- Forbidden without additional authority: commits, pushes, deployments, remote mutation, secret access, destructive migrations, package installation, and product behavior changes
+- Recovery: run documentation is new content with a nonexistence preimage; repository edits require an exact per-batch recovery record before writing
+- Agent capacity: four total slots, so fixed five-agent panels will run in sequential waves without reducing report count
+- Discovery reports: 5/5 (`C1`, `C2`, `C3`, `C4`, `C5`)
+- Coverage: 149/149 current project paths (130 baseline tracked plus nineteen accepted new source/test/tool paths), 0 exact-path omissions, no tracked links/submodules; run-owned and excluded roots classified
+- Target reports: 5/5 (`T1`, `T2`, `T3`, `T4`, `T5`)
+- Current cycle: `0009`, cycles 0001 through 0008 accepted; three-agent cleanliness audit/Wave A complete and atomic export-cache publication is selected
+- Target goals: 11 total; 2 UNSATISFIED, 7 PARTIAL, 2 BLOCKED
+- Baseline gates: documented `.venv` command fails before discovery because its launcher targets missing `E:/tmp/Python312/python.exe`; accepted Cycle 0008 fallback discovered 114 outcomes with 103 passing, the same 10 import errors, and the same 1 dependent failure because `sqlalchemy`, `aiosqlite`, and `playwright` are unavailable; combined focused 82/82, compileall, and diff-check passed; `python -m tools.verify` returns 1 honestly for those broad failures
+- Blockers: none
+- Exact next action: dispatch exactly three independent read-only Cycle 0009 plans for atomic export-cache publication
+
+## Transition Log
+
+- `2026-09-03 16:37:28 +08:00`: created the non-overwriting durable run directory and recorded initial authority, attribution, recovery, and capacity boundaries.
+- `2026-09-03 16:40 +08:00`: baseline verification completed with environment-caused failures; transitioned to the five-report current-state mapping stage.
+- `2026-09-03 16:47 +08:00`: normalized C1-C3; corrected `cache/` from generated exclusion to included active source.
+- `2026-09-03 16:54 +08:00`: normalized all five discovery reports and wrote the canonical manifest, immutable current state, and open questions for merge validation.
+- `2026-09-03 16:57 +08:00`: current-state merge passed with 130/130 exact tracked paths and five independent reports; transitioned to target design.
+- `2026-09-03 17:02 +08:00`: normalized T1. Checkpointed `PAUSED_BUDGET` before starting another incomplete target-design assignment; no product-code write occurred.
+- `2026-09-03 17:06 +08:00`: resumed after drift validation; HEAD, user-owned paths, 130/130 coverage, and existing artifacts remain valid.
+- `2026-09-03 17:16 +08:00`: normalized T2-T5 and wrote immutable target, decision log, and migration constraints for merge validation.
+- `2026-09-03 17:20 +08:00`: target merge passed (5/5 reports, 11/11 goals with oracles); initialized live state and cycle 0001 input.
+- `2026-09-03 17:25 +08:00`: merged A1-A3 and accepted one low-risk configuration-contract batch for planning.
+- `2026-09-03 17:30 +08:00`: merged P1-P3, resolved filename/removal/docs conflicts, and approved the exact execution plan.
+- `2026-09-03 17:42:33 +08:00`: recorded E1 completion after one repair and independent E2/E3 PASS verdicts; coordinator gates matched baseline attribution, accepted Cycle 0001, reconciled 131/131 current paths and unchanged dependency direction, refreshed live state, and transitioned to Cycle 0002 analysis.
+- `2026-09-03 17:46:44 +08:00`: merged three independent Cycle 0002 analyses; accepted only dependency-manifest parity for planning and split the broader verification-driver proposal.
+- `2026-09-03 17:54:25 +08:00`: merged P1-P3, resolved the documentation-scope dissent, and approved the exact dependency-manifest execution plan.
+- `2026-09-03 18:05:29 +08:00`: recorded E1 repair attempt 2 and final E2/E3 PASS verdicts; coordinator gates matched baseline attribution, accepted Cycle 0002, reconciled 132/132 current paths and unchanged runtime dependencies, advanced `TD-001` to PARTIAL, and transitioned to Cycle 0003 analysis.
+- `2026-09-03 18:14:03 +08:00`: merged three Cycle 0003 analyses and selected only cross-process runtime-lock characterization for planning; image characterization remains a separate candidate.
+- `2026-09-03 18:22:43 +08:00`: updated workflow adopted; migrated all durable artifacts to fixed `technical-debt/`, created the repository index, preserved compatible discovery/target evidence, and recorded completed E1 runtime-lock checkpoint as pending updated-flow reconciliation and review.
+- `2026-09-03 18:29:39 +08:00`: revised P1-P3 under the largest-compatible-batch rule; approved four independently recoverable checkpoints and transitioned back to Cycle 0003 execution.
+- `2026-09-03 18:50:31 +08:00`: persisted the repaired E1 whole-batch implementation and recovery evidence; focused checks pass 34/34, broad discovery remains 66/55/10/1 with the accepted missing-dependency fingerprint, and E2/E3 re-review is pending.
+- `2026-09-04 09:05:11 +08:00`: E2/E3 both returned final `PASS`; coordinator focused 34/34, unified verifier, broad 66/55/10/1, diff, scope, index, and hash gates matched accepted attribution. Accepted Cycle 0003, reconciled 137/137 coverage, advanced `TD-008` to `PARTIAL`, and transitioned to Cycle 0004 analysis.
+- `2026-09-04 09:17:02 +08:00`: completed and merged three fresh Cycle 0004 analyses. Deferred unverifiable production refactors and unevidenced resource thresholds; selected three compatible test-only characterization checkpoints and transitioned to planning.
+- `2026-09-04 09:26:27 +08:00`: merged three independent Cycle 0004 plans, resolved facade-manifest and import-isolation constraints, approved exactly three new R1 test files, and transitioned to execution.
+- `2026-09-04 09:52:42 +08:00`: E2/E3 returned final `PASS` after the final allowed repair; coordinator focused 50/50, unified verifier, broad 82/71/10/1, diff, scope, index, and hash gates passed. Accepted Cycle 0004, reconciled 140/140 coverage, and transitioned to Cycle 0005 analysis.
+- `2026-09-04 10:03:55 +08:00`: merged three fresh Cycle 0005 analyses. Deferred the insufficiently verifiable runtime-container refactor; selected account service/pool characterization plus two evidence-backed diagnostic redaction fixes and transitioned to planning.
+- `2026-09-04 10:10:25 +08:00`: merged three Cycle 0005 plans, regrouped leak reproduction and source repair as one atomic red/green checkpoint, approved the exact five-path R1 batch, and transitioned to execution.
+- `2026-09-04 12:03:43 +08:00`: E2/E3 both returned final `PASS`; coordinator focused 64/64, unified verifier, broad 96/85/10/1, compile, diff, scope, index, recovery, and hash gates matched accepted attribution. Accepted Cycle 0005, reconciled 143/143 coverage, strengthened `TD-002`, `TD-006`, and `TD-011`, and transitioned to Cycle 0006 analysis.
+- `2026-09-04 12:12 +08:00`: merged three fresh Cycle 0006 analyses; deferred the insufficiently characterized runtime-container rewrite and selected a narrowly delegated account repository boundary for independent planning.
+- `2026-09-04 12:20 +08:00`: merged three Cycle 0006 plans, reduced the allowlist to six paths, preserved existing account tests as compatibility gates, and transitioned to execution.
+- `2026-09-04 14:10 +08:00`: E2/E3 both returned final `PASS`; coordinator focused 69/69, unified verifier, broad 101/90/10/1, compile, diff, scope, index, recovery, and hash gates matched accepted attribution. Accepted Cycle 0006, reconciled 146/146 coverage, advanced `TD-004` to `PARTIAL`, and transitioned to Cycle 0007 analysis.
+- `2026-09-04 14:25 +08:00`: merged three fresh Cycle 0007 analyses; selected a single-file isolated runtime composition/lifespan characterization and deferred proxy ownership to its separate production boundary.
+- `2026-09-04 14:30 +08:00`: merged three independent Cycle 0007 plans, resolved their 9/8/7 test-grouping difference at eight parent tests, fixed R1 absent-preimage recovery and gate totals, and advanced the one-file batch to execution.
+- `2026-09-04 15:20 +08:00`: accepted Cycle 0007 on its third and final attempt after final E2/E3 `PASS`; reconciled 147/147 coverage, refreshed live state, and advanced to Cycle 0008 analysis.
+- `2026-09-04 15:35 +08:00`: merged three fresh Cycle 0008 analyses; deferred runtime-container product compatibility choices and selected the independently ready proxy repository boundary for planning.
+- `2026-09-04 15:55 +08:00`: merged three Cycle 0008 plans, rejected an unused package-facade export, fixed five new parent tests and three recovery checkpoints, and advanced the exact five-path batch to execution.
+- `2026-09-04 17:00 +08:00`: accepted Cycle 0008 after final E2/E3 `PASS`, reconciled 149/149 coverage, refreshed live state, and advanced to Cycle 0009 analysis.
+- `2026-09-04 17:30 +08:00`: completed the user-requested three-agent cleanliness audit, reconciled a 54/100 composite and zero satisfied goals, selected policy-free atomic export-cache publication, and advanced to planning.

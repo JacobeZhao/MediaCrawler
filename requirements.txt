@@ -1,3 +1,5 @@
+# Checked compatibility export of pyproject.toml [project].dependencies.
+# Edit pyproject.toml first and keep these dependency lines in the same order.
 aiosqlite>=0.21.0
 fastapi==0.110.2
 httpx==0.28.1

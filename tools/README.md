@@ -50,6 +50,7 @@ running it against production data.
 
 ## Shared Utilities
 
+- `verify.py`: standard-library local/CI verification orchestrator; see `docs/testing.md`.
 - `crawler_util.py`: browser/crawler helper functions used by the XHS flow.
 - `httpx_util.py`: configured `httpx.AsyncClient` factory.
 - `time_util.py`: timestamp and date conversion helpers.

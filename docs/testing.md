@@ -1,15 +1,27 @@
 # Testing and Verification
 
-Run this after Python changes:
+Run the primary local/CI verification entry point after Python changes from an
+active, provisioned Python environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall service config media_platform store database tools base cache model start_xhs_service.py
+python -m tools.verify
 ```
 
-Run the focused regression suite as well:
+The verifier runs dependency and configuration contracts, compilation, and full
+test discovery as separate labeled phases. It runs every phase for diagnostics
+and returns a failure if any phase fails. It does not install or resolve
+dependencies, so provision the declared environment before treating a full run
+as a release gate. The focused commands below remain useful for diagnosis.
+
+## Dependency Manifest Contract
+
+`pyproject.toml` `[project].dependencies` is the canonical direct dependency
+declaration. `requirements.txt` is its checked pip-compatible export and must
+contain the same dependency strings in the same order. Run the focused drift
+check with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+python -m unittest discover -s tests -p test_dependency_contract.py -v
 ```
 
 ## Required Smoke Checks

@@ -29,19 +29,50 @@ there is no variable expansion, process execution, escape decoding, or multiline
 continuation. A malformed file blocks startup without logging its values, and no
 variables are applied unless the entire file is valid.
 
-Important variables:
+`config/settings.py` is the canonical source for application setting names,
+types, and defaults. `.env.example` is the exhaustive application-setting
+inventory and groups the controls by responsibility:
 
-- `HOST`, `PORT`: bind address.
-- `HEADLESS`: Playwright headless mode. Both Windows wrappers intentionally
-  force this to `true`; start the Python entry point directly for headed mode.
-- `CDP_CONNECT_EXISTING`: usually `false` for service mode.
-- `XHS_INTERNATIONAL`: default `false`; `true` switches to `rednote.com`.
-- `SQLITE_DB_PATH`: crawler content SQLite path.
-- `SERVICE_DB_PATH`: service task/account SQLite path.
-- `RUNTIME_LOCK_PATH`: single-instance lock path.
-- `CRAWLER_MIN_SLEEP_SEC`, `CRAWLER_MAX_SLEEP_SEC`: crawl pacing.
-- `LOCAL_CRAWLER_ENABLED`: default `true`; set `false` for a JustOneAPI-only process
-  that skips Playwright engine and account-pool startup.
+- Server and runtime selection: `HOST`, `PORT`, `RELOAD`, `SAVE_DATA_OPTION`,
+  `XHS_INTERNATIONAL`, `HEADLESS`, `CDP_CONNECT_EXISTING`, and
+  `LOCAL_CRAWLER_ENABLED`.
+- SQLite and lock paths: `SQLITE_DB_PATH`, `SERVICE_DB_PATH`, and
+  `RUNTIME_LOCK_PATH`.
+- Crawl pacing: `CRAWLER_MIN_SLEEP_SEC`, `CRAWLER_MAX_SLEEP_SEC`,
+  `CRAWLER_GLOBAL_MIN_INTERVAL_SEC`, `CRAWLER_ACCOUNT_MIN_INTERVAL_SEC`,
+  `CRAWLER_SEARCH_MIN_INTERVAL_SEC`, `CRAWLER_DETAIL_MIN_INTERVAL_SEC`,
+  `CRAWLER_COMMENT_MIN_INTERVAL_SEC`, `CRAWLER_CREATOR_MIN_INTERVAL_SEC`,
+  `CRAWLER_TASK_START_JITTER_MIN_SEC`, and
+  `CRAWLER_TASK_START_JITTER_MAX_SEC`.
+- Crawl workload and risk bounds: `CRAWLER_ACCOUNT_REQUEST_BUDGET`,
+  `CRAWLER_ACCOUNT_BUDGET_REST_MIN_SEC`,
+  `CRAWLER_ACCOUNT_BUDGET_REST_MAX_SEC`, `CRAWLER_RISK_BACKOFF_SEC`,
+  `CRAWLER_TASK_MAX_NOTES_PER_TASK`, `CRAWLER_TASK_MAX_COMMENTS_PER_NOTE`,
+  `CRAWLER_MAX_NOTES_COUNT`, and `CRAWLER_MAX_COMMENTS_COUNT_SINGLE_NOTE`.
+- Account, task, circuit, and queue controls: `ACCOUNT_COOLDOWN_BASE_SEC`,
+  `ACCOUNT_COOLDOWN_MAX_SEC`, `ACCOUNT_HEALTH_CHECK_INTERVAL_SEC`,
+  `TASK_PAUSE_ON_ACCOUNT_ERROR`, `CIRCUIT_WINDOW_SEC`, `CIRCUIT_PAUSE_SEC`,
+  `CIRCUIT_ERROR_THRESHOLD`, `TASK_MAX_ACCOUNT_SWITCHES`,
+  `TASK_MAX_RUNTIME_SEC`, `MAX_QUEUE_SIZE`, and `MAX_BATCH_TASKS`.
+- JustOneAPI: `JUSTONEAPI_ENABLED`, `JUSTONEAPI_TOKEN`,
+  `JUSTONEAPI_BASE_URL`, `JUSTONEAPI_TIMEOUT_SEC`,
+  `JUSTONEAPI_MAX_RETRIES`, `JUSTONEAPI_RETRY_BASE_SEC`, and
+  `JUSTONEAPI_MAX_REQUESTS_PER_TASK`.
+
+The sample is configured for the normal unattended service mode, so it
+intentionally sets `HEADLESS=true` and `CDP_CONNECT_EXISTING=false`; the code
+defaults remain `false` and `true` respectively. Path settings are commented
+examples so a checkout can retain the portable defaults from
+`config/settings.py`.
+
+`XHS_COOKIES` is retained as a blank historical placeholder; no active
+`Settings` field or tracked runtime consumer reads it. `JUSTONEAPI_TOKEN` and
+all other sensitive placeholders must remain blank in the tracked sample.
+
+`XHS_ENV_FILE` is a parent-process selector, not an application setting and not
+a valid entry inside an environment file. Supervisor-only inputs such as
+`XHS_PYTHON`, `XHS_LOG_DIR`, and `XHS_RESTART_DELAY_SECONDS` are owned and
+documented by `ops/README.md`.
 
 ## JustOneAPI Provider
 

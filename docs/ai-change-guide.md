@@ -6,7 +6,8 @@ This guide is for future AI or human maintainers.
 
 - Do not treat `browser_data/`, `data/`, `exports/`, `*.db`, or `*.log` as source code.
 - Keep the service single-process unless the runtime model is redesigned.
-- Run `python -m compileall service config media_platform store database tools base cache model start_xhs_service.py` after Python changes.
+- Run `python -m tools.verify` after Python changes; `docs/testing.md` owns the
+  verification phases and result interpretation.
 - Do not rewrite `service/crawler_engine.py` in one pass. It is the highest-risk module.
 
 ## Preferred Change Pattern

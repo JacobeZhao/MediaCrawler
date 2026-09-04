@@ -13,9 +13,9 @@ from typing import Dict, List, Optional
 from tools.utils import logger
 from tools.redaction import redact_sensitive_text
 from config.settings import settings
-from . import service_db as sdb
 from .crawler_engine import XHSCrawlerEngine
 from .proxy_config import build_playwright_proxy, mask_proxy_url
+from .repositories.accounts import AccountRepository, AccountStatus
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
@@ -74,8 +74,9 @@ class AccountPool:
     15-min rotation, cooldown auto-recovery, periodic health checks.
     """
 
-    def __init__(self, default_engine: XHSCrawlerEngine):
+    def __init__(self, default_engine: XHSCrawlerEngine, repository=None):
         self._default = default_engine
+        self._repository = repository if repository is not None else AccountRepository()
         self._pool: Dict[int, XHSCrawlerEngine] = {}   # account_id -> engine
         self._lock = asyncio.Lock()
 
@@ -89,7 +90,7 @@ class AccountPool:
         self._health_task: Optional[asyncio.Task] = None
 
     async def start(self):
-        accounts = await sdb.get_active_accounts()
+        accounts = await self._repository.get_active_accounts()
         for acc in accounts:
             await self._start_engine(acc["id"], acc["name"], acc["cookie"], acc.get("proxy_id"))
         self._rebuild_engine_list()
@@ -138,9 +139,9 @@ class AccountPool:
         engine.message = "account captcha required"
         for acc_id, eng in self._pool.items():
             if eng is engine:
-                await sdb.update_account(
+                await self._repository.update_account(
                     acc_id,
-                    status=sdb.AccountStatus.CAPTCHA,
+                    status=AccountStatus.CAPTCHA,
                     captcha_count=await self._increment_captcha_count(acc_id),
                     last_checked=datetime.now().isoformat(),
                 )
@@ -157,9 +158,9 @@ class AccountPool:
         engine.message = f"account temporarily unavailable; retry after {duration}s"
         self._cool_until[id(engine)] = time.monotonic() + duration
         if engine.account_id is not None:
-            await sdb.update_account(
+            await self._repository.update_account(
                 engine.account_id,
-                status=sdb.AccountStatus.COOLING_DOWN,
+                status=AccountStatus.COOLING_DOWN,
                 last_checked=datetime.now().isoformat(),
             )
         logger.warning(
@@ -222,23 +223,23 @@ class AccountPool:
             permission_denied = error and ("没有权限" in error or "无权限" in error)
             usable = ok and not hard_auth_error and not permission_denied
             if ok:
-                new_status = sdb.AccountStatus.ACTIVE
+                new_status = AccountStatus.ACTIVE
                 eng.status = EngineStatus.READY.value
                 self._failure_counts.pop(id(eng), None)
             elif is_captcha:
-                new_status = sdb.AccountStatus.CAPTCHA
+                new_status = AccountStatus.CAPTCHA
             elif is_cooling_down:
-                new_status = sdb.AccountStatus.COOLING_DOWN
+                new_status = AccountStatus.COOLING_DOWN
             elif has_login_cookie and not hard_auth_error and not permission_denied:
-                new_status = sdb.AccountStatus.COOLING_DOWN
+                new_status = AccountStatus.COOLING_DOWN
                 eng.status = EngineStatus.COOLING_DOWN.value
                 eng.message = "login probe failed; cooling down before retry"
                 self._cool_until[id(eng)] = time.monotonic() + self._next_cooldown_duration(eng)
             else:
-                new_status = sdb.AccountStatus.INVALID
-            if not usable and not is_captcha and not is_cooling_down and new_status == sdb.AccountStatus.INVALID:
+                new_status = AccountStatus.INVALID
+            if not usable and not is_captcha and not is_cooling_down and new_status == AccountStatus.INVALID:
                 eng.status = EngineStatus.INVALID.value
-            await sdb.update_account(
+            await self._repository.update_account(
                 acc_id,
                 status=new_status,
                 last_checked=datetime.now().isoformat(),
@@ -256,13 +257,15 @@ class AccountPool:
         return results
 
     async def list_accounts_with_status(self) -> List[Dict]:
-        db_accounts = await sdb.list_accounts()
+        db_accounts = await self._repository.list_accounts()
         out = []
         for acc in db_accounts:
             eng = self._pool.get(acc["id"])
             runtime_status = eng.status if eng else acc["status"]
             cookie_preview = _cookie_preview(acc["cookie"])
-            proxy_profile = await sdb.get_proxy_profile(acc.get("proxy_id"), include_secret=False)
+            proxy_profile = await self._repository.get_proxy_profile(
+                acc.get("proxy_id"), include_secret=False
+            )
             out.append({
                 "id": acc["id"],
                 "name": acc["name"],
@@ -365,7 +368,9 @@ class AccountPool:
     ) -> bool:
         user_data_dir = os.path.join(_PROJECT_ROOT, "browser_data", f"account_{account_id}")
         os.makedirs(user_data_dir, exist_ok=True)
-        proxy_profile = await sdb.get_proxy_profile(proxy_id, include_secret=True)
+        proxy_profile = await self._repository.get_proxy_profile(
+            proxy_id, include_secret=True
+        )
         if proxy_id and not proxy_profile:
             logger.warning(
                 f"[AccountPool] account_id={account_id} proxy_id={proxy_id} not found; skip engine startup"
@@ -400,9 +405,9 @@ class AccountPool:
             logger.warning(
                 f"[AccountPool] account_id={account_id} cookie invalid, not adding to pool"
             )
-            await sdb.update_account(
+            await self._repository.update_account(
                 account_id,
-                status=sdb.AccountStatus.INVALID,
+                status=AccountStatus.INVALID,
                 last_checked=datetime.now().isoformat(),
             )
             await eng.stop()
@@ -419,7 +424,7 @@ class AccountPool:
             return False
 
     async def _increment_captcha_count(self, account_id: int) -> int:
-        acc = await sdb.get_account(account_id)
+        acc = await self._repository.get_account(account_id)
         return (acc["captcha_count"] or 0) + 1 if acc else 1
 
 

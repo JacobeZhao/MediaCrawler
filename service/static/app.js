@@ -17,6 +17,18 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  let modalReturnFocus = null;
+  let taskDrawerReturnFocus = null;
+  function showToast(message, type = "success") {
+    const region = $("toastRegion");
+    if (!region) return;
+    const toast = document.createElement("div");
+    toast.className = `toast ${type === "error" ? "error" : (type === "warn" ? "warn" : "")}`;
+    toast.setAttribute("role", type === "error" ? "alert" : "status");
+    toast.textContent = message;
+    region.appendChild(toast);
+    if (type !== "error") window.setTimeout(() => toast.remove(), 4200);
+  }
   const config = window.__XHS_CONFIG__ || {};
   const apiBase = String(config.apiBase || "").replace(/\/$/, "");
   const apiUrl = (path) => `${apiBase}${path}`;
@@ -205,6 +217,7 @@
       const active = tab.dataset.taskProvider === selected;
       tab.classList.toggle("active", active);
       tab.setAttribute("aria-checked", String(active));
+      tab.setAttribute("tabindex", active ? "0" : "-1");
     });
     $("justoneApiOptions").classList.toggle("hidden", selected !== "justoneapi");
     document.querySelectorAll("[data-local-only]").forEach(field => {
@@ -340,7 +353,7 @@
           </div>
           <div class="candidate-grid">
             <div class="candidate-field"><div class="label">手机号</div><div class="value mono">${escapeHtml(candidate.phone || "-")}</div></div>
-            <div class="candidate-field"><div class="label">密码</div><div class="value mono">${escapeHtml(candidate.password || "-")}</div></div>
+            <div class="candidate-field"><div class="label">密码</div><div class="value mono sensitive-value">已保护</div></div>
             <div class="candidate-field"><div class="label">用户 ID</div><div class="value mono">${escapeHtml(candidate.user_id || "-")}</div></div>
             <div class="candidate-field"><div class="label">注册日期</div><div class="value">${escapeHtml(candidate.registered_at || "-")}</div></div>
             <div class="candidate-field"><div class="label">短信链接</div><div class="value">${candidate.sms_link ? "已保存" : "-"}</div></div>
@@ -391,7 +404,7 @@
       const source = taskKeyword(task);
       const provider = taskProvider(task);
       return `
-        <tr class="task-row${selected}" data-task-id="${task.id}">
+        <tr class="task-row${selected}" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
           <td class="mono muted">#${task.id}</td>
           <td>
             <div class="truncate strong">${escapeHtml(taskTitle(task))}</div>
@@ -419,6 +432,29 @@
         </tr>
       `;
     }).join("");
+  }
+
+  function renderTaskDetail(task) {
+    const title = taskTitle(task);
+    const params = parseParams(task);
+    const prog = progressData(task);
+    const notes = Number(task.notes_count ?? prog.notes_count ?? 0);
+    const comments = Number(task.comments_count ?? prog.comments_count ?? 0);
+    const updated = prog.updated_at || task.heartbeat_at || task.completed_at || task.started_at || task.created_at;
+    $("taskDetailTitle").textContent = title;
+    $("taskDetailStatus").textContent = `${statusText(task.status)} · #${task.id}`;
+    $("taskDetailBody").innerHTML = `
+      <div class="detail-grid">
+        <div class="detail-item"><div class="detail-label">执行方式</div><div class="detail-value">${escapeHtml(providerLabel(taskProvider(task)))}</div></div>
+        <div class="detail-item"><div class="detail-label">任务类型</div><div class="detail-value">${escapeHtml(task.task_type || "-")}</div></div>
+        <div class="detail-item"><div class="detail-label">笔记数量</div><div class="detail-value">${num(notes)}</div></div>
+        <div class="detail-item"><div class="detail-label">评论数量</div><div class="detail-value">${num(comments)}</div></div>
+        <div class="detail-item"><div class="detail-label">创建时间</div><div class="detail-value">${escapeHtml(fmt(task.created_at))}</div></div>
+        <div class="detail-item"><div class="detail-label">最近更新</div><div class="detail-value">${escapeHtml(fmt(updated))}</div></div>
+      </div>
+      <div class="field mt-md"><div class="label">最近消息</div><div class="detail-item">${escapeHtml(prog.message || task.progress || task.error || "暂无消息")}</div></div>
+      <div class="field mt-md"><div class="label">任务参数</div><pre class="detail-item mono small-text" style="white-space:pre-wrap;margin:0">${escapeHtml(JSON.stringify(params, null, 2))}</pre></div>
+    `;
   }
 
   function renderAll() {
@@ -466,20 +502,30 @@
     const task = state.tasks.find(t => Number(t.id) === Number(taskId));
     if (!task) return;
     state.selectedTaskId = task.id;
+    taskDrawerReturnFocus = document.activeElement;
     renderTasks();
+    renderTaskDetail(task);
+    $("taskDetailDrawer").classList.add("open");
+    window.setTimeout(() => $("closeTaskDetailBtn").focus(), 0);
+  }
+
+  function closeTaskDetail() {
+    $("taskDetailDrawer").classList.remove("open");
+    if (taskDrawerReturnFocus && typeof taskDrawerReturnFocus.focus === "function") taskDrawerReturnFocus.focus();
+    taskDrawerReturnFocus = null;
   }
 
   async function submitJson(path, payload) {
     const result = await json(path, { method: "POST", headers: headers(), body: JSON.stringify(payload) });
     await refreshAll();
-    alert(result.message || "提交成功");
+    showToast(result.message || "提交成功");
   }
 
   async function submitTask(path, payload) {
     try {
       await submitJson(path, payload);
     } catch (error) {
-      alert(`任务提交失败：${error.message || error}`);
+      showToast(`任务提交失败：${error.message || error}`, "error");
     }
   }
 
@@ -517,9 +563,11 @@
     const activeKey = `${state.taskType}-${state.taskMode}`;
     document.querySelectorAll("[data-task-type]").forEach(tab => {
       tab.classList.toggle("active", tab.dataset.taskType === state.taskType);
+      tab.setAttribute("aria-selected", String(tab.dataset.taskType === state.taskType));
     });
     document.querySelectorAll("[data-task-mode]").forEach(tab => {
       tab.classList.toggle("active", tab.dataset.taskMode === state.taskMode);
+      tab.setAttribute("aria-selected", String(tab.dataset.taskMode === state.taskMode));
     });
     renderProviderPicker();
     document.querySelectorAll("[data-task-form]").forEach(form => {
@@ -539,11 +587,33 @@
     if ($("qrProxy")) $("qrProxy").innerHTML = proxyOptions($("qrProxy").value);
   }
 
-  function openModal(id) { $(id).classList.add("open"); }
-  function closeModal(id) { $(id).classList.remove("open"); }
+  function openModal(id) {
+    const modal = $(id);
+    if (!modal) return;
+    modalReturnFocus = document.activeElement;
+    modal.classList.add("open");
+    const focusable = modal.querySelector("button, input, select, textarea");
+    if (focusable) window.setTimeout(() => focusable.focus(), 0);
+  }
+  function closeModal(id) {
+    const modal = $(id);
+    if (modal) modal.classList.remove("open");
+    if (modalReturnFocus && typeof modalReturnFocus.focus === "function") modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+
+  function trapFocus(container, event) {
+    if (!container || event.key !== "Tab") return;
+    const items = [...container.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])")];
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
 
   async function copyText(text) {
-    if (!text) return alert("没有可复制的内容");
+    if (!text) return showToast("没有可复制的内容", "warn");
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
     } else {
@@ -557,7 +627,7 @@
       document.execCommand("copy");
       input.remove();
     }
-    alert("已复制");
+    showToast("已复制");
   }
 
   function candidateCopyText(candidate, kind) {
@@ -608,6 +678,12 @@
   }
 
   function bindEvents() {
+    document.querySelectorAll("label:not([for])").forEach(label => {
+      const control = label.querySelector("input, select, textarea") || label.parentElement?.querySelector("input, select, textarea");
+      if (!control) return;
+      if (!control.id) control.id = `field-${Math.random().toString(36).slice(2, 9)}`;
+      label.htmlFor = control.id;
+    });
     $("refreshBtn").addEventListener("click", refreshAll);
     $("taskStatusFilter").addEventListener("change", renderTasks);
     $("taskKeywordFilter").addEventListener("input", renderTasks);
@@ -622,7 +698,7 @@
         a.click();
         URL.revokeObjectURL(url);
       } catch (error) {
-        alert(`导出失败：${error.message || error}`);
+        showToast(`导出失败：${error.message || error}`, "error");
       }
     });
     document.querySelectorAll("[data-task-type]").forEach(tab => {
@@ -630,11 +706,25 @@
         state.taskType = tab.dataset.taskType;
         renderTaskForm();
       });
+      tab.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const tabs = [...document.querySelectorAll("[data-task-type]")];
+        const index = tabs.indexOf(tab);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        event.preventDefault(); tabs[next].focus(); tabs[next].click();
+      });
     });
     document.querySelectorAll("[data-task-mode]").forEach(tab => {
       tab.addEventListener("click", () => {
         state.taskMode = tab.dataset.taskMode;
         renderTaskForm();
+      });
+      tab.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const tabs = [...document.querySelectorAll("[data-task-mode]")];
+        const index = tabs.indexOf(tab);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        event.preventDefault(); tabs[next].focus(); tabs[next].click();
       });
     });
     document.querySelectorAll("[data-task-provider]").forEach(tab => {
@@ -643,6 +733,14 @@
         if (provider !== state.taskProvider) applyProviderSearchDefaults(provider);
         state.taskProvider = provider;
         renderTaskForm();
+      });
+      tab.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End", " ", "Enter"].includes(event.key)) return;
+        const tabs = [...document.querySelectorAll("[data-task-provider]")];
+        if ([" ", "Enter"].includes(event.key)) { event.preventDefault(); tab.click(); return; }
+        const index = tabs.indexOf(tab);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        event.preventDefault(); tabs[next].focus(); tabs[next].click();
       });
     });
     $("justoneIncludeComments").addEventListener("change", event => {
@@ -667,8 +765,19 @@
         }
         if (row) await selectTask(row.dataset.taskId);
       } catch (error) {
-        alert(`操作失败：${error.message || error}`);
+        showToast(`操作失败：${error.message || error}`, "error");
       }
+    });
+    $("taskRows").addEventListener("keydown", event => {
+      if (!(["Enter", " "].includes(event.key))) return;
+      const row = event.target.closest("[data-task-id]");
+      if (!row || event.target.closest("button, input, select, textarea")) return;
+      event.preventDefault();
+      selectTask(row.dataset.taskId);
+    });
+    $("closeTaskDetailBtn").addEventListener("click", closeTaskDetail);
+    $("taskDetailDrawer").addEventListener("click", event => {
+      if (event.target === $("taskDetailDrawer")) closeTaskDetail();
     });
     $("accountList").addEventListener("click", async event => {
       const cookieBtn = event.target.closest("[data-cookie-id]");
@@ -717,16 +826,16 @@
       try {
         const result = await json(`/api/proxies/${checkBtn.dataset.proxyCheck}/check`, { method: "POST" });
         await refreshAll();
-        alert(`${result.message || "检测完成"}${result.observed_ip ? `\n出口 IP：${result.observed_ip}` : ""}${result.error ? `\n${result.error}` : ""}`);
+        showToast(`${result.message || "检测完成"}${result.observed_ip ? ` · 出口 IP：${result.observed_ip}` : ""}${result.error ? ` · ${result.error}` : ""}`, result.error ? "warn" : "success");
       } catch (error) {
-        alert(`检测失败：${error.message || error}`);
+        showToast(`检测失败：${error.message || error}`, "error");
       }
     });
     $("saveProxyBtn").addEventListener("click", async () => {
       const name = $("proxyName").value.trim();
       const server = $("proxyServer").value.trim();
-      if (!name) return alert("请填写代理名称");
-      if (!server) return alert("请填写代理服务器");
+      if (!name) return showToast("请填写代理名称", "warn");
+      if (!server) return showToast("请填写代理服务器", "warn");
       try {
         await json("/api/proxies", {
           method: "POST",
@@ -747,7 +856,7 @@
         closeModal("proxyModal");
         await refreshAll();
       } catch (error) {
-        alert(`保存代理失败：${error.message || error}`);
+        showToast(`保存代理失败：${error.message || error}`, "error");
       }
     });
     $("candidateBtn").addEventListener("click", async () => {
@@ -780,29 +889,29 @@
     $("saveCookieBtn").addEventListener("click", async () => {
       const cookie = $("accountCookie").value.trim();
       const name = $("accountName").value.trim();
-      if (!cookie) return alert("请粘贴 Cookie");
+      if (!cookie) return showToast("请粘贴 Cookie", "warn");
       try {
         const proxy_id = $("cookieProxy").value ? Number($("cookieProxy").value) : null;
         if (state.cookieAccountId) {
           await json(`/api/accounts/${state.cookieAccountId}/cookie`, { method: "POST", headers: headers(), body: JSON.stringify({ cookie }) });
           await json(`/api/accounts/${state.cookieAccountId}/proxy`, { method: "POST", headers: headers(), body: JSON.stringify({ proxy_id, restart: true }) });
         } else {
-          if (!name) return alert("请填写账号备注");
+          if (!name) return showToast("请填写账号备注", "warn");
           await json("/api/accounts", { method: "POST", headers: headers(), body: JSON.stringify({ name, cookie, proxy_id }) });
         }
         closeModal("cookieModal");
         await refreshAll();
       } catch (error) {
-        alert(`保存失败：${error.message || error}`);
+        showToast(`保存失败：${error.message || error}`, "error");
       }
     });
     $("healthBtn").addEventListener("click", async () => {
       try {
         const result = await json("/api/accounts/health_check", { method: "POST" });
         await refreshAll();
-        alert(result.message || "健康检查完成");
+        showToast(result.message || "健康检查完成");
       } catch (error) {
-        alert(`健康检查失败：${error.message || error}`);
+        showToast(`健康检查失败：${error.message || error}`, "error");
       }
     });
     $("qrBtn").addEventListener("click", () => openModal("qrModal"));
@@ -824,6 +933,19 @@
     });
     $("closeQrBtn").addEventListener("click", closeQr);
     document.querySelectorAll("[data-close]").forEach(btn => btn.addEventListener("click", () => closeModal(btn.dataset.close)));
+    document.querySelectorAll(".modal").forEach(modal => modal.addEventListener("click", event => {
+      if (event.target === modal) modal.id === "qrModal" ? closeQr() : closeModal(modal.id);
+    }));
+    document.addEventListener("keydown", event => {
+      const openModalElement = document.querySelector(".modal.open");
+      if (openModalElement) {
+        trapFocus(openModalElement, event);
+        if (event.key === "Escape") return openModalElement.id === "qrModal" ? closeQr() : closeModal(openModalElement.id);
+        return;
+      }
+      if (event.key === "Tab" && $("taskDetailDrawer").classList.contains("open")) return trapFocus($("taskDetailDrawer"), event);
+      if (event.key === "Escape" && $("taskDetailDrawer").classList.contains("open")) closeTaskDetail();
+    });
 
     $("searchSingleForm").addEventListener("submit", async event => {
       event.preventDefault();
@@ -842,7 +964,7 @@
       event.preventDefault();
       const data = formData(event.target);
       const keywords = lines(data.keywords);
-      if (!keywords.length) return alert("请输入至少一个关键词");
+      if (!keywords.length) return showToast("请输入至少一个关键词", "warn");
       await submitTask("/api/tasks/batch_search", {
         ...providerPayload(),
         keywords,
@@ -866,7 +988,7 @@
       event.preventDefault();
       const data = formData(event.target);
       const creator_urls = lines(data.creator_urls);
-      if (!creator_urls.length) return alert("请输入至少一个博主主页或用户 ID");
+      if (!creator_urls.length) return showToast("请输入至少一个博主主页或用户 ID", "warn");
       await submitTask("/api/tasks/batch_creator", {
         ...providerPayload(),
         creator_urls,
@@ -877,7 +999,7 @@
       event.preventDefault();
       const data = formData(event.target);
       const note_input = String(data.note_input || "").trim();
-      if (!note_input) return alert("请输入笔记链接或 ID");
+      if (!note_input) return showToast("请输入笔记链接或 ID", "warn");
       await submitTask("/api/tasks/note", {
         ...providerPayload(),
         notes: [{
@@ -895,7 +1017,7 @@
         d_level: data.d_level,
         quality: data.quality,
       }));
-      if (!notes.length) return alert("请输入至少一个笔记链接或 ID");
+      if (!notes.length) return showToast("请输入至少一个笔记链接或 ID", "warn");
       await submitTask("/api/tasks/note", { ...providerPayload(), notes });
     });
   }

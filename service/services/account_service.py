@@ -6,9 +6,9 @@ from typing import Dict, Optional
 
 from fastapi import HTTPException
 
-from .. import service_db as sdb
 from ..account_pool import AccountPool
 from ..crawler_engine import XHSCrawlerEngine
+from ..repositories.accounts import AccountRepository
 from ..schemas.accounts import (
     AccountCookieRequest,
     AccountProxyRequest,
@@ -20,10 +20,16 @@ from ..task_manager import TaskManager
 from ..proxy_config import build_playwright_proxy
 
 
-async def _get_active_proxy_or_error(proxy_id: Optional[int], *, include_secret: bool = False):
+async def _get_active_proxy_or_error(
+    proxy_id: Optional[int],
+    *,
+    include_secret: bool = False,
+    repository=None,
+):
     if not proxy_id:
         return None
-    proxy = await sdb.get_proxy_profile(proxy_id, include_secret=include_secret)
+    repository = repository if repository is not None else AccountRepository()
+    proxy = await repository.get_proxy_profile(proxy_id, include_secret=include_secret)
     if not proxy:
         raise HTTPException(404, "Proxy profile not found.")
     if proxy.get("status") != "active":
@@ -32,9 +38,10 @@ async def _get_active_proxy_or_error(proxy_id: Optional[int], *, include_secret:
 
 
 class QrSessionService:
-    def __init__(self, root_dir: str, ttl_seconds: int = 300):
+    def __init__(self, root_dir: str, ttl_seconds: int = 300, repository=None):
         self._root_dir = root_dir
         self._ttl_seconds = ttl_seconds
+        self._repository = repository if repository is not None else AccountRepository()
         self._sessions: Dict[str, dict] = {}
 
     async def cleanup_expired(self):
@@ -53,7 +60,11 @@ class QrSessionService:
 
         session_id = uuid.uuid4().hex[:10]
         temp_dir = os.path.join(self._root_dir, "browser_data", f"qr_session_{session_id}")
-        proxy_profile = await _get_active_proxy_or_error(proxy_id, include_secret=True)
+        proxy_profile = await _get_active_proxy_or_error(
+            proxy_id,
+            include_secret=True,
+            repository=self._repository,
+        )
         temp_engine = XHSCrawlerEngine(
             account_id=None,
             user_data_dir=temp_dir,
@@ -122,10 +133,12 @@ class AccountService:
         pool: AccountPool,
         qr_sessions: QrSessionService,
         task_manager: Optional[TaskManager] = None,
+        repository=None,
     ):
         self._pool = pool
         self._qr_sessions = qr_sessions
         self._task_manager = task_manager
+        self._repository = repository if repository is not None else AccountRepository()
 
     async def _wake_paused_tasks(self):
         if self._task_manager:
@@ -139,9 +152,11 @@ class AccountService:
             raise HTTPException(400, "Account name cannot be empty.")
         if not req.cookie.strip():
             raise HTTPException(400, "Cookie cannot be empty.")
-        await _get_active_proxy_or_error(req.proxy_id)
+        await _get_active_proxy_or_error(req.proxy_id, repository=self._repository)
 
-        account_id = await sdb.add_account(req.name.strip(), req.cookie.strip(), req.proxy_id)
+        account_id = await self._repository.add_account(
+            req.name.strip(), req.cookie.strip(), req.proxy_id
+        )
         ok = await self._pool.add_account(
             account_id,
             req.name.strip(),
@@ -149,22 +164,22 @@ class AccountService:
             req.proxy_id,
         )
         if not ok:
-            await sdb.delete_account(account_id)
+            await self._repository.delete_account(account_id)
             raise HTTPException(400, "Cookie is invalid or account startup failed.")
-        await sdb.update_account(account_id, status="active")
+        await self._repository.update_account(account_id, status="active")
         await self._wake_paused_tasks()
         return {"account_id": account_id, "message": f"Account {req.name} added."}
 
     async def delete_account(self, account_id: int):
-        acc = await sdb.get_account(account_id)
+        acc = await self._repository.get_account(account_id)
         if not acc:
             raise HTTPException(404, "Account not found.")
         await self._pool.remove_account(account_id)
-        await sdb.delete_account(account_id)
+        await self._repository.delete_account(account_id)
         return {"message": "Account deleted."}
 
     async def update_account_cookie(self, account_id: int, req: AccountCookieRequest):
-        acc = await sdb.get_account(account_id)
+        acc = await self._repository.get_account(account_id)
         if not acc:
             raise HTTPException(404, "Account not found.")
         await self._pool.remove_account(account_id)
@@ -172,7 +187,9 @@ class AccountService:
         if not ok:
             await self._pool.add_account(account_id, acc["name"], acc["cookie"], acc.get("proxy_id"))
             raise HTTPException(400, "New cookie is invalid.")
-        await sdb.update_account(account_id, cookie=req.cookie.strip(), status="active")
+        await self._repository.update_account(
+            account_id, cookie=req.cookie.strip(), status="active"
+        )
         await self._wake_paused_tasks()
         return {"message": "Cookie updated."}
 
@@ -194,9 +211,9 @@ class AccountService:
                 raise HTTPException(400, result.get("error") or "QR login finished but account verification failed.")
             name = session["name"]
             proxy_id = session.get("proxy_id")
-            account_id = await sdb.add_account(name, cookie_str, proxy_id)
+            account_id = await self._repository.add_account(name, cookie_str, proxy_id)
             await self._pool.adopt_engine(account_id, eng)
-            await sdb.update_account(account_id, status="active")
+            await self._repository.update_account(account_id, status="active")
             self._qr_sessions.forget(session_id)
             await self._wake_paused_tasks()
             return {
@@ -215,7 +232,7 @@ class AccountService:
         return {"message": "QR session cancelled."}
 
     async def list_candidate_accounts(self):
-        return await sdb.list_candidate_accounts()
+        return await self._repository.list_candidate_accounts()
 
     async def save_candidate_accounts(self, req: CandidateAccountBulkRequest):
         ids = []
@@ -225,18 +242,18 @@ class AccountService:
             data["user_id"] = data.get("user_id", "").strip()
             if not data["phone"] and not data["user_id"]:
                 raise HTTPException(400, "Candidate account must include phone or user_id.")
-            ids.append(await sdb.upsert_candidate_account(data))
+            ids.append(await self._repository.upsert_candidate_account(data))
         return {"candidate_ids": ids, "count": len(ids), "message": f"Saved {len(ids)} candidate accounts."}
 
     async def delete_candidate_account(self, candidate_id: int):
-        await sdb.delete_candidate_account(candidate_id)
+        await self._repository.delete_candidate_account(candidate_id)
         return {"message": "Candidate account deleted."}
 
     async def update_account_proxy(self, account_id: int, req: AccountProxyRequest):
-        acc = await sdb.get_account(account_id)
+        acc = await self._repository.get_account(account_id)
         if not acc:
             raise HTTPException(404, "Account not found.")
-        await _get_active_proxy_or_error(req.proxy_id)
+        await _get_active_proxy_or_error(req.proxy_id, repository=self._repository)
         if req.restart:
             await self._pool.remove_account(account_id)
             ok = await self._pool.add_account(
@@ -248,7 +265,7 @@ class AccountService:
             if not ok:
                 await self._pool.add_account(account_id, acc["name"], acc["cookie"], acc.get("proxy_id"))
                 raise HTTPException(400, "Account failed to restart with the selected proxy.")
-        await sdb.update_account(account_id, proxy_id=req.proxy_id)
+        await self._repository.update_account(account_id, proxy_id=req.proxy_id)
         if req.restart:
-            await sdb.update_account(account_id, status="active")
+            await self._repository.update_account(account_id, status="active")
         return {"message": "Account proxy updated."}

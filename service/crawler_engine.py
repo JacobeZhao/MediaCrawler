@@ -1081,7 +1081,7 @@ class XHSCrawlerEngine:
                             "done": True,
                             "verified": False,
                             "cookie": cookie_str,
-                            "error": f"post-login verification failed: {exc}",
+                            "error": f"post-login verification failed: {redact_sensitive_text(exc)}",
                         }
                     if verified:
                         self.status = "ready"

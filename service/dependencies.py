@@ -9,6 +9,8 @@ from .executors.justoneapi import JustOneApiTaskExecutor
 from .executors.local import LocalTaskExecutor
 from .executors.registry import ExecutorRegistry
 from .providers.justoneapi.client import JustOneApiClient
+from .repositories.accounts import AccountRepository
+from .repositories.proxies import ProxyRepository
 from .services.account_service import AccountService, QrSessionService
 from .services.export_service import ExportService
 from .services.note_service import NoteQueryService
@@ -25,8 +27,10 @@ cfg.SAVE_DATA_OPTION = "sqlite"
 cfg.PLATFORM = "xhs"
 cfg.ENABLE_GET_COMMENTS = True
 
+account_repository = AccountRepository()
+proxy_repository = ProxyRepository()
 engine = XHSCrawlerEngine()
-pool = AccountPool(default_engine=engine)
+pool = AccountPool(default_engine=engine, repository=account_repository)
 justoneapi_client = JustOneApiClient(
     settings.justoneapi_token,
     base_url=settings.justoneapi_base_url,
@@ -45,12 +49,14 @@ executor_registry = ExecutorRegistry(
     ]
 )
 task_manager = TaskManager(executor_registry)
-qr_sessions = QrSessionService(ROOT_DIR)
-account_service = AccountService(pool, qr_sessions, task_manager)
+qr_sessions = QrSessionService(ROOT_DIR, repository=account_repository)
+account_service = AccountService(
+    pool, qr_sessions, task_manager, repository=account_repository
+)
 task_service = TaskService(task_manager)
 note_query_service = NoteQueryService(IMAGE_DIR)
 export_service = ExportService(IMAGE_DIR)
-proxy_service = ProxyService()
+proxy_service = ProxyService(repository=proxy_repository)
 
 
 def get_engine() -> XHSCrawlerEngine:
