@@ -12,6 +12,7 @@ ROUTES_DIR = ROOT / "service" / "routes"
 
 EXPECTED_JS_IDS = {
     "accountCookie", "accountList", "accountName",
+    "accountHealthDetail", "accountHealthValue",
     "apiError", "candidateBtn",
     "candidateList", "closeQrBtn", "closeTaskDetailBtn", "cookieModalTitle",
     "creatorBatchForm", "creatorSingleForm", "deleteTasksBtn", "exportBtn",
@@ -21,6 +22,7 @@ EXPECTED_JS_IDS = {
     "noteBatchForm", "noteSingleForm", "openCookieBtn", "openCreateBtn",
     "providerReadiness", "qrAccountName", "qrBtn", "qrImage", "qrMessage",
     "refreshBtn", "selectVisibleTasks", "selectionCount",
+    "taskCompletedValue", "taskCompletionValue", "taskTotalValue",
     "reloadCandidatesBtn", "saveCookieBtn", "searchBatchForm",
     "searchSingleForm", "startQrBtn", "taskDetailBody",
     "taskDetailDrawer", "taskDetailStatus", "taskDetailTitle",
@@ -241,8 +243,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertLessEqual(set(self.markup.references), html_ids)
 
     def test_static_assets_and_task_control_domains_are_stable(self):
-        self.assertEqual(self.markup.hrefs, ["/static/styles.css?v=20261009-2"])
-        self.assertEqual(self.markup.srcs, ["/static/app.js?v=20261009-2"])
+        self.assertEqual(self.markup.hrefs, ["/static/styles.css?v=20261009-3"])
+        self.assertEqual(self.markup.srcs, ["/static/app.js?v=20261009-3"])
         self.assertEqual(set(self.markup.data_values["data-task-type"]), {"search", "creator", "note"})
         self.assertEqual(set(self.markup.data_values["data-task-mode"]), {"single", "batch"})
         self.assertEqual(set(self.markup.data_values["data-task-provider"]), {"local", "justoneapi"})
@@ -276,6 +278,17 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn('class="grid-overview"', self.html)
         self.assertIn('id="deleteTasksBtn" disabled', self.html)
         self.assertIn('id="exportBtn" disabled', self.html)
+
+    def test_summary_and_compact_task_columns(self):
+        self.assertIn('class="summary-strip"', self.html)
+        self.assertLess(self.html.index('class="summary-strip"'), self.html.index('class="layout"'))
+        self.assertNotIn('<h2 class="panel-title">账号池</h2>', self.html)
+        self.assertNotIn('class="col-id"', self.html)
+        self.assertNotIn('class="col-provider"', self.html)
+        self.assertIn('colspan="7"', self.javascript)
+        self.assertIn('state.status.task_counts', self.javascript)
+        self.assertIn('"crawling"', self.javascript)
+        self.assertNotIn('s === "active"', self.javascript)
 
     def test_frontend_api_manifest_is_implemented_by_routes(self):
         frontend, calls = _javascript_endpoints(self.javascript, "service/static/app.js")

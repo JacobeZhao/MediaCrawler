@@ -154,7 +154,20 @@
 
   function isAccountReady(account) {
     const s = accountRuntime(account);
-    return s === "ready" || s === "active";
+    return s === "ready" || s === "crawling";
+  }
+
+  function renderSummary() {
+    const healthy = state.accounts.filter(isAccountReady).length;
+    const accountTotal = state.accounts.length;
+    const counts = state.status.task_counts || {};
+    const total = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
+    const completed = Number(counts.completed || 0);
+    $("accountHealthValue").textContent = accountTotal ? `${Math.round(healthy * 100 / accountTotal)}%` : "-";
+    $("accountHealthDetail").textContent = `可用 ${num(healthy)} / ${num(accountTotal)}`;
+    $("taskTotalValue").textContent = num(total);
+    $("taskCompletedValue").textContent = num(completed);
+    $("taskCompletionValue").textContent = total ? `${Math.round(completed * 100 / total)}%` : "-";
   }
 
   function candidateCookieReady(candidate) {
@@ -281,7 +294,7 @@
     $("selectVisibleTasks").indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
     $("selectVisibleTasks").disabled = visibleIds.length === 0;
     if (!rows.length) {
-      $("taskRows").innerHTML = `<tr><td colspan="9"><div class="empty">没有匹配的任务</div></td></tr>`;
+      $("taskRows").innerHTML = `<tr><td colspan="7"><div class="empty">没有匹配的任务</div></td></tr>`;
       return;
     }
     $("taskRows").innerHTML = rows.map(task => {
@@ -292,31 +305,24 @@
       const target = Number(params.max_notes || 0);
       const pct = target ? Math.min(100, Math.round(notes * 100 / target)) : 0;
       const message = prog.message || task.progress || task.error || "";
-      const updated = prog.updated_at || task.heartbeat_at || task.completed_at || task.started_at || task.created_at;
       const selected = Number(state.selectedTaskId) === Number(task.id) ? " selected" : "";
       const canResume = !["pending", "running"].includes(task.status);
       const canRecrawl = canResume && task.task_type !== "note";
-      const source = taskKeyword(task);
-      const provider = taskProvider(task);
       return `
         <tr class="task-row${selected}${state.selectedTaskIds.has(Number(task.id)) ? " checked" : ""}" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
           <td><input type="checkbox" data-select-task-id="${task.id}" aria-label="选择任务 #${task.id}" ${state.selectedTaskIds.has(Number(task.id)) ? "checked" : ""}></td>
-          <td class="mono muted">#${task.id}</td>
           <td>
             <div class="truncate strong">${escapeHtml(taskTitle(task))}</div>
-            <div class="small-text muted">${escapeHtml(task.task_type || "-")} · 创建 ${fmt(task.created_at)}</div>
           </td>
-          <td><span class="provider-badge ${provider === "justoneapi" ? "api" : "local"}">${providerLabel(provider)}</span></td>
           <td><span class="pill ${statusClass(task.status)}">${statusText(task.status)}</span></td>
           <td>
             <div><b>${num(notes)}</b>${target ? ` / ${num(target)}` : ""} 篇</div>
             <div class="progress"><span style="width:${pct}%"></span></div>
-            <div class="small-text muted">${pct}%${source ? ` · ${escapeHtml(source)}` : ""}</div>
+            <div class="small-text muted">${pct}%</div>
           </td>
           <td><b>${num(comments)}</b><div class="small-text muted">目标 ${num(params.max_comments || 0)} / 篇</div></td>
           <td>
-            <div class="truncate">${escapeHtml(message || "-")}</div>
-            <div class="small-text muted">更新 ${fmt(updated)}</div>
+            <div class="truncate task-message" title="${escapeHtml(message || "-")}">${escapeHtml(compact(message || "-", 48))}</div>
           </td>
           <td>
             <div class="row">
@@ -354,6 +360,7 @@
   }
 
   function renderAll() {
+    renderSummary();
     renderAccounts();
     renderCandidates();
     renderTasks();

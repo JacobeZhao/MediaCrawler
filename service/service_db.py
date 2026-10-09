@@ -1082,6 +1082,12 @@ async def list_tasks(limit: int = 100) -> List[Dict]:
         return [_decode_task_row(r) for r in rows]
 
 
+async def get_task_status_counts() -> Dict[str, int]:
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        cursor = await db.execute("SELECT status, COUNT(*) FROM tasks GROUP BY status")
+        return {status: count for status, count in await cursor.fetchall()}
+
+
 def validate_task_ids(value) -> List[int]:
     if not isinstance(value, list) or not 1 <= len(value) <= 100:
         raise ValueError("Select between 1 and 100 tasks.")

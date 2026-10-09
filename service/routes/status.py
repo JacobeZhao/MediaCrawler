@@ -22,6 +22,7 @@ async def get_status():
         for provider, provider_status in readiness.items()
     }
     status["ready_accounts"] = get_pool().ready_count()
+    status["task_counts"] = await sdb.get_task_status_counts()
     status["circuit_breaker"] = circuit_breaker.status()
     status["rate_limiter"] = rate_limiter.snapshot()
     status["recent_events"] = await sdb.list_recent_crawl_events(limit=10)

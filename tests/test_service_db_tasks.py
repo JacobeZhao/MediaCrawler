@@ -63,6 +63,22 @@ class ServiceDbProviderTaskTest(unittest.IsolatedAsyncioTestCase):
             await db.delete_tasks([task_id])
         self.assertIsNotNone(await db.get_task(task_id))
 
+    async def test_status_counts_cover_all_tasks_not_just_list_limit(self):
+        self.assertEqual({}, await db.get_task_status_counts())
+        ids = [
+            await db.create_task(db.TaskType.SEARCH, {"keyword": f"count-{index}"})
+            for index in range(101)
+        ]
+        await db.update_task_status(ids[0], db.TaskStatus.COMPLETED)
+        await db.update_task_status(ids[1], db.TaskStatus.FAILED)
+        self.assertEqual(100, len(await db.list_tasks()))
+        self.assertEqual(
+            {"pending": 99, "completed": 1, "failed": 1},
+            await db.get_task_status_counts(),
+        )
+        await db.delete_tasks([ids[0], ids[1]])
+        self.assertEqual({"pending": 99}, await db.get_task_status_counts())
+
     async def test_resume_reset_rejects_missing_or_changed_task(self):
         task_id = await db.create_task(db.TaskType.SEARCH, {"keyword": "reset"})
         await db.update_task_status(task_id, db.TaskStatus.COMPLETED)

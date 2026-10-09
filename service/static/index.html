@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>小皮爬虫服务</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20261009-2">
+  <link rel="stylesheet" href="/static/styles.css?v=20261009-3">
 </head>
 <body>
 <div class="app">
@@ -23,12 +23,16 @@
   <main class="shell">
     <div id="apiError" class="alert hidden" role="alert"></div>
 
+    <section class="summary-strip" aria-label="服务统计">
+      <div class="summary-item"><span class="summary-label">账号健康度</span><strong id="accountHealthValue">-</strong><span class="summary-detail" id="accountHealthDetail">可用 0 / 0</span></div>
+      <div class="summary-item"><span class="summary-label">任务总数</span><strong id="taskTotalValue">0</strong><span class="summary-detail">全部任务</span></div>
+      <div class="summary-item"><span class="summary-label">已完成</span><strong id="taskCompletedValue">0</strong><span class="summary-detail">完成状态</span></div>
+      <div class="summary-item"><span class="summary-label">任务完成率</span><strong id="taskCompletionValue">-</strong><span class="summary-detail">已完成 / 总数</span></div>
+    </section>
+
     <section class="layout">
       <aside class="panel account-panel">
         <div class="panel-head">
-          <div>
-            <h2 class="panel-title">账号池</h2>
-          </div>
           <div class="row account-actions">
             <button class="btn ghost small" id="candidateBtn">候选账号</button>
             <button class="btn primary small" id="healthBtn">健康检查</button>
@@ -72,9 +76,7 @@
             <thead>
               <tr>
                 <th scope="col" class="col-select"><span class="sr-only">选择</span></th>
-                <th scope="col" class="col-id">ID</th>
                 <th scope="col">任务</th>
-                <th scope="col" class="col-provider">方式</th>
                 <th scope="col" class="col-status">状态</th>
                 <th scope="col" class="col-note-progress">笔记进度</th>
                 <th scope="col" class="col-comments">评论</th>
@@ -256,7 +258,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261009-2"></script>
+  <script src="/static/app.js?v=20261009-3"></script>
 
 </body>
 </html>
