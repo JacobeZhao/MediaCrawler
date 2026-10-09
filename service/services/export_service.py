@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import re
 import time
 import urllib.request
 from typing import Optional
@@ -19,6 +20,82 @@ from .note_service import parse_image_list
 class ExportService:
     def __init__(self, image_dir: str):
         self._image_dir = image_dir
+
+    @staticmethod
+    def _safe_excel_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", value)[:32767]
+            if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+                return "'" + value[:32766]
+        return value
+
+    async def build_selected_tasks_workbook(self, task_ids: list[int]) -> io.BytesIO:
+        selected = sdb.validate_task_ids(task_ids)
+        await sdb.get_selected_tasks(selected)
+        if not os.path.exists(SQLITE_DB_PATH):
+            raise FileNotFoundError("Selected tasks have no attributed content.")
+
+        placeholders = ",".join("?" for _ in selected)
+        async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='xhs_content_source'"
+            )
+            if await cursor.fetchone() is None:
+                raise FileNotFoundError("Selected tasks have no attributed content.")
+            cursor = await db.execute(
+                "SELECT n.note_id, n.title, n.desc, n.nickname, n.user_id, n.time, "
+                "n.liked_count, n.comment_count, n.collected_count, n.note_url, "
+                "n.image_list, GROUP_CONCAT(DISTINCT s.task_id) AS task_ids "
+                "FROM xhs_content_source s JOIN xhs_note n ON n.note_id=s.entity_id "
+                f"WHERE s.entity_type='note' AND s.task_id IN ({placeholders}) "
+                "GROUP BY n.note_id ORDER BY n.note_id",
+                selected,
+            )
+            notes = [dict(row) for row in await cursor.fetchall()]
+            cursor = await db.execute(
+                "SELECT c.comment_id, c.note_id, c.content, c.nickname, c.user_id, "
+                "c.create_time, c.like_count, c.parent_comment_id, c.pictures, "
+                "GROUP_CONCAT(DISTINCT s.task_id) AS task_ids "
+                "FROM xhs_content_source s JOIN xhs_note_comment c ON c.comment_id=s.entity_id "
+                f"WHERE s.entity_type='comment' AND s.task_id IN ({placeholders}) "
+                "GROUP BY c.comment_id ORDER BY c.comment_id",
+                selected,
+            )
+            comments = [dict(row) for row in await cursor.fetchall()]
+
+        if not notes and not comments:
+            raise FileNotFoundError("Selected tasks have no attributed content.")
+
+        wb = openpyxl.Workbook()
+        notes_ws = wb.active
+        notes_ws.title = "notes"
+        note_fields = (
+            "task_ids", "note_id", "title", "desc", "nickname", "user_id",
+            "time", "liked_count", "comment_count", "collected_count",
+            "note_url", "image_list",
+        )
+        comments_ws = wb.create_sheet("comments")
+        comment_fields = (
+            "task_ids", "comment_id", "note_id", "content", "nickname",
+            "user_id", "create_time", "like_count", "parent_comment_id", "pictures",
+        )
+        for ws, fields, rows in (
+            (notes_ws, note_fields, notes),
+            (comments_ws, comment_fields, comments),
+        ):
+            ws.append(fields)
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(fields))}{len(rows) + 1}"
+            for row in rows:
+                ws.append([self._safe_excel_value(row.get(field)) for field in fields])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf
 
     async def build_tagged_notes_workbook(self) -> io.BytesIO:
         tags = await sdb.get_all_note_tags()

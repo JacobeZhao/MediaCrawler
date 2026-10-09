@@ -27,7 +27,7 @@ import config
 from tools.time_util import get_current_timestamp
 from tools.redaction import redact_sensitive_text
 from tools.utils import logger
-from var import source_keyword_var
+from var import source_keyword_var, task_id_var
 
 from ._store_impl import *
 
@@ -127,7 +127,7 @@ async def update_xhs_note(note_item: Dict):
         "xsec_token": note_item.get("xsec_token"),  # xsec_token
     }
     logger.info("[store.xhs.update_xhs_note] note_id=%s", note_id)
-    await XhsStoreFactory.create_store().store_content(local_db_item)
+    await XhsStoreFactory.create_store().store_content(local_db_item, task_id=task_id_var.get())
 
 
 async def batch_update_xhs_note_comments(note_id: str, comments: List[Dict]):
@@ -180,7 +180,7 @@ async def update_xhs_note_comment(note_id: str, comment_item: Dict):
         note_id,
         local_db_item["comment_id"],
     )
-    await XhsStoreFactory.create_store().store_comment(local_db_item)
+    await XhsStoreFactory.create_store().store_comment(local_db_item, task_id=task_id_var.get())
 
 
 async def save_creator(user_id: str, creator: Dict):

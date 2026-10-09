@@ -22,6 +22,67 @@ class ServiceDbProviderTaskTest(unittest.IsolatedAsyncioTestCase):
         db.SQLITE_DB_PATH = self._original_content_path
         self._temp_dir.cleanup()
 
+    async def test_batch_delete_is_atomic_and_preserves_unrelated_rows(self):
+        first = await db.create_task(db.TaskType.SEARCH, {"keyword": "first"})
+        second = await db.create_task(db.TaskType.SEARCH, {"keyword": "second"})
+        active = await db.create_task(db.TaskType.SEARCH, {"keyword": "active"})
+        await db.update_task_status(first, db.TaskStatus.COMPLETED)
+        await db.update_task_status(second, db.TaskStatus.FAILED)
+        async with aiosqlite.connect(db.SERVICE_DB_PATH) as connection:
+            await connection.execute(
+                "INSERT INTO provider_requests (task_id, provider, endpoint, created_at) VALUES (?,?,?,?)",
+                (first, "local", "search", "now"),
+            )
+            await connection.execute(
+                "INSERT INTO crawl_events (task_id, event_type, created_at) VALUES (?,?,?)",
+                (first, "test", "now"),
+            )
+            await connection.commit()
+
+        with self.assertRaises(RuntimeError):
+            await db.delete_tasks([first, active])
+        self.assertIsNotNone(await db.get_task(first))
+        with self.assertRaises(LookupError):
+            await db.delete_tasks([first, 999999])
+        self.assertIsNotNone(await db.get_task(first))
+        self.assertEqual([first, second], await db.delete_tasks([first, second]))
+        self.assertIsNone(await db.get_task(first))
+        self.assertIsNone(await db.get_task(second))
+        self.assertIsNotNone(await db.get_task(active))
+        async with aiosqlite.connect(db.SERVICE_DB_PATH) as connection:
+            for table in ("provider_requests", "crawl_events"):
+                cursor = await connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE task_id=?", (first,)
+                )
+                self.assertEqual(0, (await cursor.fetchone())[0])
+
+    async def test_paused_task_cannot_be_deleted(self):
+        task_id = await db.create_task(db.TaskType.SEARCH, {"keyword": "paused"})
+        await db.update_task_status(task_id, db.TaskStatus.PAUSED)
+        with self.assertRaises(RuntimeError):
+            await db.delete_tasks([task_id])
+        self.assertIsNotNone(await db.get_task(task_id))
+
+    async def test_resume_reset_rejects_missing_or_changed_task(self):
+        task_id = await db.create_task(db.TaskType.SEARCH, {"keyword": "reset"})
+        await db.update_task_status(task_id, db.TaskStatus.COMPLETED)
+        with self.assertRaises(RuntimeError):
+            await db.reset_task_for_resume(
+                task_id, {"keyword": "reset"}, expected_status=db.TaskStatus.PAUSED.value
+            )
+        self.assertEqual("completed", (await db.get_task(task_id))["status"])
+        await db.delete_tasks([task_id])
+        with self.assertRaises(LookupError):
+            await db.reset_task_for_resume(
+                task_id, {"keyword": "reset"}, expected_status=db.TaskStatus.COMPLETED.value
+            )
+
+    def test_selected_task_ids_require_unique_positive_ints(self):
+        self.assertEqual([1, 2], db.validate_task_ids([1, 2]))
+        for invalid in ([], [1, 1], [0], [-1], [True], ["1"], None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                db.validate_task_ids(invalid)
+
     async def test_dedupe_is_isolated_by_provider(self):
         params = {"keyword": "test", "max_notes": 20}
 

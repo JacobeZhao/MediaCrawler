@@ -813,18 +813,25 @@ async def reset_task_for_resume(
     new_params: Dict,
     *,
     clear_checkpoint: bool = False,
-):
+    expected_status: str | None = None,
+) -> None:
     async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
-            "SELECT task_type, provider FROM tasks WHERE id=?",
+            "SELECT task_type, provider, status FROM tasks WHERE id=?",
             (task_id,),
         )
         row = await cursor.fetchone()
-        task_type = row[0] if row else TaskType.SEARCH.value
-        provider = row[1] if row else TaskProvider.LOCAL.value
+        if row is None:
+            raise LookupError("Task not found.")
+        if expected_status is not None and row[2] != expected_status:
+            raise RuntimeError("Task status changed; refresh and retry.")
+        task_type = row[0]
+        provider = row[1]
         # Keep existing notes_count/comments_count so history is visible while pending.
         checkpoint_assignment = ", checkpoint_json=NULL" if clear_checkpoint else ""
-        await db.execute(
+        cursor = await db.execute(
             "UPDATE tasks SET status=?, params=?, task_key=?, started_at=NULL, completed_at=NULL, "
             "error=NULL, progress='resume queued', progress_data=?, retry_at=NULL, "
             "attempt_count=0, result_data=NULL, lease_owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL "
@@ -837,6 +844,8 @@ async def reset_task_for_resume(
                 task_id,
             ),
         )
+        if cursor.rowcount != 1:
+            raise LookupError("Task not found.")
         await db.commit()
 
 
@@ -1071,6 +1080,50 @@ async def list_tasks(limit: int = 100) -> List[Dict]:
         )
         rows = await cursor.fetchall()
         return [_decode_task_row(r) for r in rows]
+
+
+def validate_task_ids(value) -> List[int]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 100:
+        raise ValueError("Select between 1 and 100 tasks.")
+    if any(type(task_id) is not int or task_id <= 0 for task_id in value):
+        raise ValueError("Task IDs must be positive integers.")
+    if len(set(value)) != len(value):
+        raise ValueError("Task IDs must be unique.")
+    return value
+
+
+async def get_selected_tasks(task_ids: List[int]) -> List[Dict]:
+    placeholders = ",".join("?" for _ in task_ids)
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT * FROM tasks WHERE id IN ({placeholders})", task_ids
+        )
+        rows = await cursor.fetchall()
+    tasks = {row["id"]: _decode_task_row(row) for row in rows}
+    if len(tasks) != len(task_ids):
+        raise LookupError("One or more selected tasks were not found.")
+    return [tasks[task_id] for task_id in task_ids]
+
+
+async def delete_tasks(task_ids: List[int]) -> List[int]:
+    placeholders = ",".join("?" for _ in task_ids)
+    async with aiosqlite.connect(SERVICE_DB_PATH) as db:
+        await _configure_sqlite(db)
+        await db.execute("BEGIN IMMEDIATE")
+        cursor = await db.execute(
+            f"SELECT id, status FROM tasks WHERE id IN ({placeholders})", task_ids
+        )
+        rows = await cursor.fetchall()
+        if len(rows) != len(task_ids):
+            raise LookupError("One or more selected tasks were not found.")
+        if any(row[1] not in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value) for row in rows):
+            raise RuntimeError("Only completed or failed tasks can be deleted.")
+        await db.execute(f"DELETE FROM provider_requests WHERE task_id IN ({placeholders})", task_ids)
+        await db.execute(f"DELETE FROM crawl_events WHERE task_id IN ({placeholders})", task_ids)
+        await db.execute(f"DELETE FROM tasks WHERE id IN ({placeholders})", task_ids)
+        await db.commit()
+    return task_ids
 
 
 def _task_params(task: Dict) -> Dict:

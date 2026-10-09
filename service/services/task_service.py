@@ -58,6 +58,20 @@ class TaskService:
         result = task.get("result_data")
         return bool(isinstance(result, dict) and result.get("budget_exhausted"))
 
+    @staticmethod
+    async def _reset_existing_task(task: Dict, params: Dict, *, clear_checkpoint: bool = False):
+        try:
+            await sdb.reset_task_for_resume(
+                task["id"],
+                params,
+                clear_checkpoint=clear_checkpoint,
+                expected_status=task["status"],
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     async def create_search_task(self, req: SearchTaskRequest):
         provider, params = self._request_params(req)
         await self._ensure_provider_ready(provider)
@@ -73,7 +87,7 @@ class TaskService:
                     existing["status"] == TaskStatus.PAUSED.value
                     and self._budget_exhausted(existing)
                 ):
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     return {
                         "task_id": existing["id"],
@@ -100,7 +114,7 @@ class TaskService:
                         },
                     )
                 if existing["status"] == TaskStatus.COMPLETED.value and existing["notes_count"] < req.max_notes:
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     return {
                         "task_id": existing["id"],
@@ -142,7 +156,7 @@ class TaskService:
                     existing["status"] == TaskStatus.PAUSED.value
                     and self._budget_exhausted(existing)
                 ):
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     task_ids.append(existing["id"])
                     resumed += 1
@@ -151,7 +165,7 @@ class TaskService:
                     skipped += 1
                     continue
                 if existing["status"] == TaskStatus.COMPLETED.value and existing["notes_count"] < req.max_notes:
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     task_ids.append(existing["id"])
                     resumed += 1
@@ -186,7 +200,7 @@ class TaskService:
                     existing["status"] == TaskStatus.PAUSED.value
                     and self._budget_exhausted(existing)
                 ):
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     return {
                         "task_id": existing["id"],
@@ -213,7 +227,7 @@ class TaskService:
                         },
                     )
                 if existing["status"] == TaskStatus.COMPLETED.value and existing["notes_count"] < req.max_notes:
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     return {
                         "task_id": existing["id"],
@@ -248,7 +262,7 @@ class TaskService:
                     existing["status"] == TaskStatus.PAUSED.value
                     and self._budget_exhausted(existing)
                 ):
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     task_ids.append(existing["id"])
                     resumed += 1
@@ -257,7 +271,7 @@ class TaskService:
                     skipped += 1
                     continue
                 if existing["status"] == TaskStatus.COMPLETED.value and existing["notes_count"] < req.max_notes:
-                    await sdb.reset_task_for_resume(existing["id"], params)
+                    await self._reset_existing_task(existing, params)
                     await self._task_manager.requeue(existing["id"])
                     task_ids.append(existing["id"])
                     resumed += 1
@@ -301,6 +315,18 @@ class TaskService:
         tasks = await sdb.list_tasks()
         return await sdb.enrich_tasks_with_crawl_counts(tasks)
 
+    async def delete_tasks(self, task_ids):
+        try:
+            selected = sdb.validate_task_ids(task_ids)
+            deleted = await sdb.delete_tasks(selected)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"deleted_task_ids": deleted, "count": len(deleted)}
+
     async def get_task(self, task_id: int):
         task = await sdb.get_task(task_id)
         if not task:
@@ -321,7 +347,7 @@ class TaskService:
             raise HTTPException(409, "Task is already queued or running.")
         params: Dict = json.loads(task["params"])
         params.pop("force", None)
-        await sdb.reset_task_for_resume(task_id, params)
+        await self._reset_existing_task(task, params)
         await self._task_manager.requeue(task_id)
         return {"message": f"Task {task_id} has been requeued for resume."}
 
@@ -335,6 +361,6 @@ class TaskService:
             raise HTTPException(400, "Note tasks do not support recrawl.")
         params: Dict = json.loads(task["params"])
         params["force"] = True
-        await sdb.reset_task_for_resume(task_id, params, clear_checkpoint=True)
+        await self._reset_existing_task(task, params, clear_checkpoint=True)
         await self._task_manager.requeue(task_id)
         return {"message": f"Task {task_id} has been requeued for recrawl."}

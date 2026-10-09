@@ -11,25 +11,20 @@ STATIC_DIR = ROOT / "service" / "static"
 ROUTES_DIR = ROOT / "service" / "routes"
 
 EXPECTED_JS_IDS = {
-    "aBad", "aCaptcha", "accountCookie", "accountList", "accountName",
-    "addProxyBtn", "apiError", "aReady", "aTotal", "candidateBtn",
+    "accountCookie", "accountList", "accountName",
+    "apiError", "candidateBtn",
     "candidateList", "closeQrBtn", "closeTaskDetailBtn", "cookieModalTitle",
-    "cookieProxy", "creatorBatchForm", "creatorSingleForm", "exportBtn",
+    "creatorBatchForm", "creatorSingleForm", "deleteTasksBtn", "exportBtn",
     "healthBtn", "justoneApiOptions", "justoneIncludeComments",
     "justoneIncludeDetails", "justoneIncludeReplies", "justoneMaxPages",
     "justoneMaxRequests", "justoneNoteType", "justoneTimeFilter",
-    "lastRefresh", "mAccountRate", "mAccountText", "mBlocked",
-    "mBlockedText", "mComments", "mNotes", "mPending", "mRunning",
-    "noteBatchForm", "noteSingleForm", "openCookieBtn", "protectionPill",
-    "providerReadiness", "proxyConfigBtn", "proxyCount", "proxyList",
-    "proxyName", "proxyPassword", "proxyServer", "proxyStatus", "proxyType",
-    "proxyUsername", "qrAccountName", "qrBtn", "qrImage", "qrMessage",
-    "qrProxy", "queueSize", "readyAccounts", "refreshBtn",
-    "reloadCandidatesBtn", "saveCookieBtn", "saveProxyBtn", "searchBatchForm",
-    "searchSingleForm", "servicePill", "startQrBtn", "taskDetailBody",
+    "noteBatchForm", "noteSingleForm", "openCookieBtn", "openCreateBtn",
+    "providerReadiness", "qrAccountName", "qrBtn", "qrImage", "qrMessage",
+    "refreshBtn", "selectVisibleTasks", "selectionCount",
+    "reloadCandidatesBtn", "saveCookieBtn", "searchBatchForm",
+    "searchSingleForm", "startQrBtn", "taskDetailBody",
     "taskDetailDrawer", "taskDetailStatus", "taskDetailTitle",
     "taskKeywordFilter", "taskRows", "taskStatusFilter", "toastRegion",
-    "totalAccounts",
 }
 
 EXPECTED_FRONTEND_ENDPOINTS = {
@@ -37,17 +32,14 @@ EXPECTED_FRONTEND_ENDPOINTS = {
     ("GET", "/api/tasks"),
     ("GET", "/api/accounts"),
     ("GET", "/api/accounts/candidates"),
-    ("GET", "/api/proxies"),
     ("GET", "/api/accounts/qrcode/{param}/poll"),
-    ("GET", "/api/export/notes"),
+    ("POST", "/api/export/tasks"),
+    ("DELETE", "/api/tasks"),
     ("DELETE", "/api/accounts/qrcode/{param}"),
     ("DELETE", "/api/accounts/{param}"),
     ("DELETE", "/api/accounts/candidates/{param}"),
     ("POST", "/api/tasks/{param}/resume"),
     ("POST", "/api/tasks/{param}/recrawl"),
-    ("POST", "/api/accounts/{param}/proxy"),
-    ("POST", "/api/proxies/{param}/check"),
-    ("POST", "/api/proxies"),
     ("POST", "/api/accounts/{param}/cookie"),
     ("POST", "/api/accounts"),
     ("POST", "/api/accounts/health_check"),
@@ -67,7 +59,7 @@ EXPECTED_STATE_CLASSES = {
 
 EXPECTED_FRONTEND_CALLS = {
     "api": {"delegation": 1, "endpoint": 1},
-    "json": {"delegation": 1, "endpoint": 18},
+    "json": {"delegation": 1, "endpoint": 15},
     "submitJson": {"delegation": 1, "endpoint": 2},
     "submitTask": {"endpoint": 6},
 }
@@ -249,8 +241,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertLessEqual(set(self.markup.references), html_ids)
 
     def test_static_assets_and_task_control_domains_are_stable(self):
-        self.assertEqual(self.markup.hrefs, ["/static/styles.css"])
-        self.assertEqual(self.markup.srcs, ["/static/app.js"])
+        self.assertEqual(self.markup.hrefs, ["/static/styles.css?v=20261009-2"])
+        self.assertEqual(self.markup.srcs, ["/static/app.js?v=20261009-2"])
         self.assertEqual(set(self.markup.data_values["data-task-type"]), {"search", "creator", "note"})
         self.assertEqual(set(self.markup.data_values["data-task-mode"]), {"single", "batch"})
         self.assertEqual(set(self.markup.data_values["data-task-provider"]), {"local", "justoneapi"})
@@ -258,6 +250,32 @@ class FrontendContractTests(unittest.TestCase):
             set(self.markup.data_values["data-task-form"]),
             {"search-single", "search-batch", "creator-single", "creator-batch", "note-single", "note-batch"},
         )
+
+    def test_account_pool_is_first_and_proxy_configuration_is_not_exposed(self):
+        self.assertLess(
+            self.html.index('class="panel account-panel"'),
+            self.html.index('class="panel workspace-panel"'),
+        )
+        self.assertIn('grid-template-areas:"resources workspace"', self.css)
+        self.assertIn('grid-template-areas:"resources" "workspace"', self.css)
+        self.assertNotIn("代理", self.html)
+        self.assertNotIn("/api/proxies", self.javascript)
+        self.assertNotIn("/proxy`", self.javascript)
+
+    def test_account_actions_and_headings_are_compact(self):
+        for text in (
+            "账号状态会直接影响队列是否继续执行",
+            "实时展示每个任务的笔记数、评论数、目标和最近状态",
+            "选择爬取方式后，可提交单个或批量任务",
+        ):
+            self.assertNotIn(text, self.html)
+        self.assertIn('class="row account-actions"', self.html)
+        self.assertIn("grid-template-columns:repeat(4,minmax(0,1fr))", self.css)
+        self.assertIn('id="createTaskModal" role="dialog"', self.html)
+        self.assertIn('id="selectVisibleTasks"', self.html)
+        self.assertNotIn('class="grid-overview"', self.html)
+        self.assertIn('id="deleteTasksBtn" disabled', self.html)
+        self.assertIn('id="exportBtn" disabled', self.html)
 
     def test_frontend_api_manifest_is_implemented_by_routes(self):
         frontend, calls = _javascript_endpoints(self.javascript, "service/static/app.js")
@@ -268,7 +286,7 @@ class FrontendContractTests(unittest.TestCase):
             for helper in EXPECTED_FRONTEND_CALLS
         }
         self.assertEqual(classifications, EXPECTED_FRONTEND_CALLS)
-        self.assertEqual(len(calls), 30)
+        self.assertEqual(len(calls), 27)
 
     def test_frontend_api_parser_rejects_unclassified_calls_and_mixed_segments(self):
         with self.assertRaisesRegex(

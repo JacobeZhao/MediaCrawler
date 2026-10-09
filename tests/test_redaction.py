@@ -87,7 +87,11 @@ class PersistenceRedactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_qr_fetch_failure_never_logs_url_or_response_body(self):
         class Element:
             async def get_property(self, name):
-                return "https://example.test/qr?token=url-secret"
+                class Handle:
+                    async def json_value(self):
+                        return "https://example.test/qr?token=url-secret"
+
+                return Handle()
 
         page = AsyncMock()
         page.wait_for_selector.return_value = Element()

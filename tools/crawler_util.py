@@ -47,15 +47,19 @@ async def find_login_qrcode(page: Page, selector: str) -> str:
         elements = await page.wait_for_selector(
             selector=selector,
         )
-        login_qrcode_img = str(await elements.get_property("src"))  # type: ignore
-        if "http://" in login_qrcode_img or "https://" in login_qrcode_img:
+        src_handle = await elements.get_property("src")
+        login_qrcode_img = await src_handle.json_value() if src_handle else ""
+        if login_qrcode_img.startswith(("http://", "https://")):
             async with make_async_client(follow_redirects=True) as client:
                 logger.info("[find_login_qrcode] fetching remote QR image")
                 resp = await client.get(login_qrcode_img, headers={"User-Agent": get_user_agent()})
                 if resp.status_code == 200:
                     image_data = resp.content
-                    base64_image = base64.b64encode(image_data).decode('utf-8')
-                    return base64_image
+                    mime_type = resp.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+                    if not mime_type.startswith("image/"):
+                        mime_type = "image/png"
+                    base64_image = base64.b64encode(image_data).decode("utf-8")
+                    return f"data:{mime_type};base64,{base64_image}"
                 raise RuntimeError(
                     f"fetch login image failed with status {resp.status_code}"
                 )

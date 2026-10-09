@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import time
@@ -106,13 +107,18 @@ class QrSessionService:
         return session
 
     async def cancel(self, session_id: str):
-        session = self._sessions.pop(session_id, None)
+        session = self._sessions.get(session_id)
         if session:
-            try:
-                await session["engine"].stop()
-            except Exception:
-                pass
-            self._delete_session_dir(session_id)
+            async with session.setdefault("poll_lock", asyncio.Lock()):
+                if self._sessions.get(session_id) is not session:
+                    return
+                session["cancelled"] = True
+                self._sessions.pop(session_id, None)
+                try:
+                    await session["engine"].stop()
+                except Exception:
+                    pass
+                self._delete_session_dir(session_id)
 
     async def close_all(self):
         for session_id in list(self._sessions):
@@ -202,30 +208,36 @@ class AccountService:
 
     async def poll_qrcode(self, session_id: str):
         session = await self._qr_sessions.get(session_id)
-        eng: XHSCrawlerEngine = session["engine"]
-        result = await eng.check_qrcode_login_done(session["session_before"])
+        async with session.setdefault("poll_lock", asyncio.Lock()):
+            if session.get("cancelled"):
+                raise HTTPException(404, "QR session not found or expired.")
+            if "poll_result" in session:
+                return session["poll_result"]
+            eng: XHSCrawlerEngine = session["engine"]
+            result = await eng.check_qrcode_login_done(session["session_before"])
 
-        if result.get("done"):
-            cookie_str = result.get("cookie", "")
-            if not result.get("verified"):
-                raise HTTPException(400, result.get("error") or "QR login finished but account verification failed.")
-            name = session["name"]
-            proxy_id = session.get("proxy_id")
-            account_id = await self._repository.add_account(name, cookie_str, proxy_id)
-            await self._pool.adopt_engine(account_id, eng)
-            await self._repository.update_account(account_id, status="active")
-            self._qr_sessions.forget(session_id)
-            await self._wake_paused_tasks()
-            return {
-                "status": "success",
-                "account_id": account_id,
-                "name": name,
-                "message": f"Account {name} added by QR login.",
-            }
+            if result.get("done"):
+                cookie_str = result.get("cookie", "")
+                if not result.get("verified"):
+                    raise HTTPException(400, result.get("error") or "QR login finished but account verification failed.")
+                name = session["name"]
+                proxy_id = session.get("proxy_id")
+                account_id = await self._repository.add_account(name, cookie_str, proxy_id)
+                await self._pool.adopt_engine(account_id, eng)
+                await self._repository.update_account(account_id, status="active")
+                session["poll_result"] = {
+                    "status": "success",
+                    "account_id": account_id,
+                    "name": name,
+                    "message": f"Account {name} added by QR login.",
+                }
+                self._qr_sessions.forget(session_id)
+                await self._wake_paused_tasks()
+                return session["poll_result"]
 
-        if result.get("error"):
-            return {"status": "pending", "message": result["error"]}
-        return {"status": "pending", "message": "Waiting for QR login confirmation."}
+            if result.get("error"):
+                return {"status": "pending", "message": result["error"]}
+            return {"status": "pending", "message": "Waiting for QR login confirmation."}
 
     async def cancel_qrcode(self, session_id: str):
         await self._qr_sessions.cancel(session_id)

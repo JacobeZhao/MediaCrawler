@@ -4,15 +4,17 @@
     tasks: [],
     accounts: [],
     candidates: [],
-    proxies: [],
-    proxyError: "",
     selectedTaskId: null,
+    selectedTaskIds: new Set(),
     taskType: "search",
     taskMode: "single",
     taskProvider: "local",
     cookieAccountId: null,
     qrSessionId: "",
     qrTimer: null,
+    qrStarting: false,
+    qrPolling: "",
+    qrGeneration: 0,
     refreshing: false,
   };
 
@@ -65,7 +67,9 @@
         const body = await response.json();
         message = apiErrorMessage(body.detail ?? body.message ?? body);
       } catch (_) {}
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return response;
   }
@@ -153,33 +157,6 @@
     return s === "ready" || s === "active";
   }
 
-  function activeProxies() {
-    return state.proxies.filter(proxy => proxy.status !== "inactive");
-  }
-
-  function proxyName(proxyId) {
-    if (!proxyId) return "未绑定代理";
-    const proxy = state.proxies.find(p => Number(p.id) === Number(proxyId));
-    return proxy ? `${proxy.name || `代理 ${proxy.id}`} (#${proxy.id})` : `代理 #${proxyId}`;
-  }
-
-  function proxyOptions(selectedId, allowEmptyLabel = "不使用代理") {
-    const selected = selectedId ? Number(selectedId) : "";
-    const emptySelected = selected === "" ? " selected" : "";
-    const options = activeProxies();
-    if (selected && !options.some(proxy => Number(proxy.id) === selected)) {
-      const current = state.proxies.find(proxy => Number(proxy.id) === selected);
-      options.unshift(current || { id: selected, name: `代理 ${selected}`, masked_url: "当前绑定" });
-    }
-    return [
-      `<option value=""${emptySelected}>${escapeHtml(allowEmptyLabel)}</option>`,
-      ...options.map(proxy => {
-        const isSelected = Number(proxy.id) === selected ? " selected" : "";
-        return `<option value="${proxy.id}"${isSelected}>${escapeHtml(proxy.name || `代理 ${proxy.id}`)} · ${escapeHtml(proxy.masked_url || proxy.server || "")}</option>`;
-      })
-    ].join("");
-  }
-
   function candidateCookieReady(candidate) {
     return Boolean(
       candidate.has_web_session &&
@@ -189,26 +166,6 @@
       candidate.has_xsecappid &&
       candidate.has_id_token
     );
-  }
-
-  function renderTop() {
-    const readyCount = state.accounts.filter(isAccountReady).length;
-    const total = state.accounts.length;
-    const providers = Object.values(state.status.providers || {});
-    const providerReady = providers.some(detail => (
-      detail === true || Boolean(detail && detail.ready === true)
-    ));
-    const serviceReady = state.status.status === "ready" || readyCount > 0 || providerReady;
-    const limiter = state.status.rate_limiter || {};
-    const penalties = Object.keys(limiter.active_penalties_sec || {}).length;
-    $("servicePill").className = `pill ${serviceReady ? "ready" : "paused"}`;
-    $("servicePill").textContent = serviceReady ? "服务可运行" : "等待可用来源";
-    $("protectionPill").className = `pill ${penalties ? "paused" : "ready"}`;
-    $("protectionPill").textContent = penalties ? `保护退避 ${penalties}` : "保护开启";
-    $("queueSize").textContent = state.status.queue_size ?? 0;
-    $("readyAccounts").textContent = readyCount;
-    $("totalAccounts").textContent = total;
-    $("lastRefresh").textContent = `刷新 ${new Date().toLocaleTimeString()}`;
   }
 
   function renderProviderPicker() {
@@ -238,35 +195,7 @@
     pill.textContent = ready ? "可用" : (statusKnown ? providerReason(detail && (detail.reason || detail.message)) : "状态未知");
   }
 
-  function renderMetrics() {
-    const running = state.tasks.filter(t => t.status === "running").length;
-    const pending = state.tasks.filter(t => t.status === "pending").length;
-    const paused = state.tasks.filter(t => t.status === "paused").length;
-    const failed = state.tasks.filter(t => t.status === "failed").length;
-    const notes = state.tasks.reduce((sum, t) => sum + Number(t.notes_count || progressData(t).notes_count || 0), 0);
-    const comments = state.tasks.reduce((sum, t) => sum + Number(t.comments_count || progressData(t).comments_count || 0), 0);
-    const ready = state.accounts.filter(isAccountReady).length;
-    const total = state.accounts.length;
-    $("mRunning").textContent = running;
-    $("mPending").textContent = pending;
-    $("mBlocked").textContent = paused + failed;
-    $("mBlockedText").textContent = `${paused} 暂停 / ${failed} 失败`;
-    $("mNotes").textContent = num(notes);
-    $("mComments").textContent = num(comments);
-    $("mAccountRate").textContent = total ? `${Math.round(ready * 100 / total)}%` : "0%";
-    $("mAccountText").textContent = `${ready} 可用 / ${total} 总账号`;
-  }
-
   function renderAccounts() {
-    const ready = state.accounts.filter(isAccountReady).length;
-    const captcha = state.accounts.filter(a => accountRuntime(a) === "captcha" || Number(a.captcha_count || 0) > 0).length;
-    const bad = state.accounts.filter(a => ["invalid", "deleted", "failed", "error"].includes(accountRuntime(a))).length;
-    $("aReady").textContent = ready;
-    $("aCaptcha").textContent = captcha;
-    $("aBad").textContent = bad;
-    $("aTotal").textContent = state.accounts.length;
-    renderProxies();
-
     if (!state.accounts.length) {
       $("accountList").innerHTML = `<div class="empty">暂无账号</div>`;
       return;
@@ -275,8 +204,6 @@
       const runtime = accountRuntime(account);
       const cls = isAccountReady(account) ? "ready" : (runtime === "captcha" ? "captcha" : statusClass(runtime));
       const msg = account.message ? `<div class="small-text warn-text mt-xxs">${escapeHtml(compact(account.message, 90))}</div>` : "";
-      const proxyText = account.proxy_name || proxyName(account.proxy_id);
-      const proxyServer = account.proxy_server ? ` · ${escapeHtml(account.proxy_server)}` : "";
       return `
         <div class="account-item">
           <div class="row-between">
@@ -285,50 +212,10 @@
           </div>
           <div class="small-text muted mono truncate mt-xs">${escapeHtml(account.cookie_preview || "")}</div>
           <div class="small-text muted mt-xs">ID ${account.id} · 验证码 ${account.captcha_count ?? 0} · 检查 ${fmt(account.last_checked)}</div>
-          <div class="small-text muted mt-xs truncate">代理：${escapeHtml(proxyText)}${proxyServer}</div>
           ${msg}
-          <div class="proxy-bind-row mt-sm">
-            <select class="select small-select" data-account-proxy-select="${account.id}">
-              ${proxyOptions(account.proxy_id)}
-            </select>
-            <button class="btn ghost small" data-proxy-save="${account.id}">绑定并重启</button>
-            <button class="btn ghost small" data-proxy-clear="${account.id}">解绑并重启</button>
-          </div>
           <div class="row mt-md">
             <button class="btn ghost small" data-cookie-id="${account.id}">替换 Cookie</button>
             <button class="btn danger small" data-delete-id="${account.id}">删除</button>
-          </div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  function renderProxies() {
-    if (!$("proxyList")) return;
-    $("proxyCount").textContent = state.proxies.length;
-    if (state.proxyError) {
-      $("proxyList").innerHTML = `<div class="empty">代理接口异常：${escapeHtml(state.proxyError)}</div>`;
-      return;
-    }
-    if (!state.proxies.length) {
-      $("proxyList").innerHTML = `<div class="empty">暂无代理配置</div>`;
-      return;
-    }
-    $("proxyList").innerHTML = state.proxies.map(proxy => {
-      const status = proxy.status || "active";
-      const cls = status === "active" ? "ready" : "paused";
-      const error = proxy.last_error ? `<div class="small-text warn-text mt-xxs truncate">${escapeHtml(compact(proxy.last_error, 90))}</div>` : "";
-      return `
-        <div class="proxy-item">
-          <div class="row-between">
-            <div class="truncate"><b>${escapeHtml(proxy.name || `代理 ${proxy.id}`)}</b></div>
-            <span class="pill ${cls}">${escapeHtml(status)}</span>
-          </div>
-          <div class="small-text muted mono truncate mt-xs">${escapeHtml(proxy.masked_url || proxy.server || "-")}</div>
-          <div class="small-text muted mt-xs">ID ${proxy.id} · ${escapeHtml(proxy.proxy_type || "http")} · 检测 ${fmt(proxy.last_checked)}</div>
-          ${error}
-          <div class="row mt-sm">
-            <button class="btn ghost small" data-proxy-check="${proxy.id}">检测代理</button>
           </div>
         </div>
       `;
@@ -385,8 +272,16 @@
 
   function renderTasks() {
     const rows = filteredTasks();
+    const visibleIds = rows.map(task => Number(task.id));
+    const selectedVisible = visibleIds.filter(id => state.selectedTaskIds.has(id)).length;
+    $("selectionCount").textContent = `已选 ${state.selectedTaskIds.size} 项`;
+    $("exportBtn").disabled = state.selectedTaskIds.size === 0;
+    $("deleteTasksBtn").disabled = state.selectedTaskIds.size === 0;
+    $("selectVisibleTasks").checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    $("selectVisibleTasks").indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+    $("selectVisibleTasks").disabled = visibleIds.length === 0;
     if (!rows.length) {
-      $("taskRows").innerHTML = `<tr><td colspan="8"><div class="empty">没有匹配的任务</div></td></tr>`;
+      $("taskRows").innerHTML = `<tr><td colspan="9"><div class="empty">没有匹配的任务</div></td></tr>`;
       return;
     }
     $("taskRows").innerHTML = rows.map(task => {
@@ -404,7 +299,8 @@
       const source = taskKeyword(task);
       const provider = taskProvider(task);
       return `
-        <tr class="task-row${selected}" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
+        <tr class="task-row${selected}${state.selectedTaskIds.has(Number(task.id)) ? " checked" : ""}" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
+          <td><input type="checkbox" data-select-task-id="${task.id}" aria-label="选择任务 #${task.id}" ${state.selectedTaskIds.has(Number(task.id)) ? "checked" : ""}></td>
           <td class="mono muted">#${task.id}</td>
           <td>
             <div class="truncate strong">${escapeHtml(taskTitle(task))}</div>
@@ -458,13 +354,10 @@
   }
 
   function renderAll() {
-    renderTop();
-    renderMetrics();
     renderAccounts();
     renderCandidates();
     renderTasks();
     renderProviderPicker();
-    refreshProxySelects();
   }
 
   async function refreshAll() {
@@ -472,21 +365,18 @@
     state.refreshing = true;
     $("refreshBtn").disabled = true;
     try {
-      const [status, tasks, accounts, candidates, proxiesResult] = await Promise.all([
+      const [status, tasks, accounts, candidates] = await Promise.all([
         json("/api/status"),
         json("/api/tasks"),
         json("/api/accounts"),
         json("/api/accounts/candidates"),
-        json("/api/proxies")
-          .then(proxies => ({ proxies, error: "" }))
-          .catch(error => ({ proxies: [], error: error.message || String(error) })),
       ]);
       state.status = status;
       state.tasks = tasks;
+      const existingIds = new Set(tasks.map(task => Number(task.id)));
+      state.selectedTaskIds.forEach(id => { if (!existingIds.has(id)) state.selectedTaskIds.delete(id); });
       state.accounts = accounts;
       state.candidates = candidates;
-      state.proxies = Array.isArray(proxiesResult.proxies) ? proxiesResult.proxies : [];
-      state.proxyError = proxiesResult.error;
       $("apiError").classList.add("hidden");
       renderAll();
     } catch (error) {
@@ -524,6 +414,7 @@
   async function submitTask(path, payload) {
     try {
       await submitJson(path, payload);
+      closeModal("createTaskModal");
     } catch (error) {
       showToast(`任务提交失败：${error.message || error}`, "error");
     }
@@ -582,11 +473,6 @@
     });
   }
 
-  function refreshProxySelects() {
-    if ($("cookieProxy")) $("cookieProxy").innerHTML = proxyOptions($("cookieProxy").value);
-    if ($("qrProxy")) $("qrProxy").innerHTML = proxyOptions($("qrProxy").value);
-  }
-
   function openModal(id) {
     const modal = $(id);
     if (!modal) return;
@@ -604,7 +490,8 @@
 
   function trapFocus(container, event) {
     if (!container || event.key !== "Tab") return;
-    const items = [...container.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])")];
+    const items = [...container.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])")]
+      .filter(item => item.getClientRects().length > 0 && getComputedStyle(item).visibility !== "hidden");
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
@@ -648,32 +535,47 @@
   }
 
   async function closeQr() {
-    if (state.qrTimer) clearInterval(state.qrTimer);
+    state.qrGeneration += 1;
+    if (state.qrTimer) clearTimeout(state.qrTimer);
     state.qrTimer = null;
-    if (state.qrSessionId) {
-      await json(`/api/accounts/qrcode/${state.qrSessionId}`, { method: "DELETE" }).catch(() => null);
-    }
+    const sessionId = state.qrSessionId;
     state.qrSessionId = "";
+    state.qrStarting = false;
+    $("startQrBtn").disabled = false;
     $("qrImage").classList.add("hidden");
     $("qrImage").removeAttribute("src");
     $("qrMessage").textContent = "生成后请扫码确认登录";
     closeModal("qrModal");
+    if (sessionId) await json(`/api/accounts/qrcode/${sessionId}`, { method: "DELETE" }).catch(() => null);
   }
 
   async function pollQr() {
-    if (!state.qrSessionId) return;
+    if (!state.qrSessionId || state.qrPolling === state.qrSessionId) return;
+    const sessionId = state.qrSessionId;
+    state.qrPolling = sessionId;
     try {
-      const result = await json(`/api/accounts/qrcode/${state.qrSessionId}/poll`);
+      const result = await json(`/api/accounts/qrcode/${sessionId}/poll`);
+      if (sessionId !== state.qrSessionId) return;
       $("qrMessage").textContent = result.message || "等待扫码确认";
       if (result.status === "success") {
-        clearInterval(state.qrTimer);
-        state.qrTimer = null;
         state.qrSessionId = "";
         await refreshAll();
-        setTimeout(() => closeQr(), 800);
+        const generation = state.qrGeneration;
+        setTimeout(() => {
+          if (generation === state.qrGeneration && !state.qrSessionId) closeQr();
+        }, 800);
       }
     } catch (error) {
+      if (sessionId !== state.qrSessionId) return;
       $("qrMessage").textContent = `登录检查失败：${error.message || error}`;
+      if (error.status === 400 || error.status === 404) {
+        state.qrSessionId = "";
+        $("startQrBtn").disabled = false;
+        await json(`/api/accounts/qrcode/${sessionId}`, { method: "DELETE" }).catch(() => null);
+      }
+    } finally {
+      if (state.qrPolling === sessionId) state.qrPolling = "";
+      if (sessionId === state.qrSessionId) state.qrTimer = setTimeout(pollQr, 3000);
     }
   }
 
@@ -685,20 +587,56 @@
       label.htmlFor = control.id;
     });
     $("refreshBtn").addEventListener("click", refreshAll);
+    $("openCreateBtn").addEventListener("click", () => openModal("createTaskModal"));
     $("taskStatusFilter").addEventListener("change", renderTasks);
     $("taskKeywordFilter").addEventListener("input", renderTasks);
+    $("selectVisibleTasks").addEventListener("change", event => {
+      filteredTasks().forEach(task => {
+        const id = Number(task.id);
+        if (event.target.checked) state.selectedTaskIds.add(id);
+        else state.selectedTaskIds.delete(id);
+      });
+      renderTasks();
+    });
+    $("taskRows").addEventListener("change", event => {
+      const checkbox = event.target.closest("[data-select-task-id]");
+      if (!checkbox) return;
+      const id = Number(checkbox.dataset.selectTaskId);
+      if (checkbox.checked) state.selectedTaskIds.add(id);
+      else state.selectedTaskIds.delete(id);
+      renderTasks();
+      $("taskRows").querySelector(`[data-select-task-id="${id}"]`)?.focus();
+    });
     $("exportBtn").addEventListener("click", async () => {
+      const taskIds = [...state.selectedTaskIds].sort((a, b) => a - b);
+      if (!taskIds.length) return;
       try {
-        const response = await api("/api/export/notes");
+        const response = await api("/api/export/tasks", {
+          method: "POST", headers: headers(), body: JSON.stringify({ task_ids: taskIds }),
+        });
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "xhs_notes_export.xlsx";
+        a.download = "xhs_selected_tasks.xlsx";
         a.click();
         URL.revokeObjectURL(url);
       } catch (error) {
         showToast(`导出失败：${error.message || error}`, "error");
+      }
+    });
+    $("deleteTasksBtn").addEventListener("click", async () => {
+      const taskIds = [...state.selectedTaskIds].sort((a, b) => a - b);
+      if (!taskIds.length || !confirm(`删除选中的 ${taskIds.length} 个任务？采集内容会保留。`)) return;
+      try {
+        const result = await json("/api/tasks", {
+          method: "DELETE", headers: headers(), body: JSON.stringify({ task_ids: taskIds }),
+        });
+        state.selectedTaskIds.clear();
+        await refreshAll();
+        showToast(result.message || `已删除 ${taskIds.length} 个任务`);
+      } catch (error) {
+        showToast(`删除失败：${error.message || error}`, "error");
       }
     });
     document.querySelectorAll("[data-task-type]").forEach(tab => {
@@ -749,6 +687,7 @@
       if (!enabled) $("justoneIncludeReplies").checked = false;
     });
     $("taskRows").addEventListener("click", async event => {
+      if (event.target.closest("[data-select-task-id]")) return;
       const view = event.target.closest("[data-view-id]");
       const resume = event.target.closest("[data-resume-id]");
       const recrawl = event.target.closest("[data-recrawl-id]");
@@ -782,8 +721,6 @@
     $("accountList").addEventListener("click", async event => {
       const cookieBtn = event.target.closest("[data-cookie-id]");
       const deleteBtn = event.target.closest("[data-delete-id]");
-      const proxySaveBtn = event.target.closest("[data-proxy-save]");
-      const proxyClearBtn = event.target.closest("[data-proxy-clear]");
       if (cookieBtn) {
         const account = state.accounts.find(a => Number(a.id) === Number(cookieBtn.dataset.cookieId));
         state.cookieAccountId = account.id;
@@ -791,72 +728,11 @@
         $("accountName").value = account.name || "";
         $("accountName").disabled = true;
         $("accountCookie").value = "";
-        $("cookieProxy").value = account.proxy_id || "";
         openModal("cookieModal");
-      }
-      if (proxySaveBtn) {
-        const accountId = proxySaveBtn.dataset.proxySave;
-        const select = document.querySelector(`[data-account-proxy-select="${accountId}"]`);
-        const proxyId = select && select.value ? Number(select.value) : null;
-        await json(`/api/accounts/${accountId}/proxy`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ proxy_id: proxyId, restart: true }),
-        });
-        await refreshAll();
-      }
-      if (proxyClearBtn && confirm(`确认解绑账号 #${proxyClearBtn.dataset.proxyClear} 的代理并重启？`)) {
-        await json(`/api/accounts/${proxyClearBtn.dataset.proxyClear}/proxy`, {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({ proxy_id: null, restart: true }),
-        });
-        await refreshAll();
       }
       if (deleteBtn && confirm(`确认删除账号 #${deleteBtn.dataset.deleteId}？`)) {
         await json(`/api/accounts/${deleteBtn.dataset.deleteId}`, { method: "DELETE" });
         await refreshAll();
-      }
-    });
-    $("proxyConfigBtn").addEventListener("click", () => openModal("proxyModal"));
-    $("addProxyBtn").addEventListener("click", () => openModal("proxyModal"));
-    $("proxyList").addEventListener("click", async event => {
-      const checkBtn = event.target.closest("[data-proxy-check]");
-      if (!checkBtn) return;
-      try {
-        const result = await json(`/api/proxies/${checkBtn.dataset.proxyCheck}/check`, { method: "POST" });
-        await refreshAll();
-        showToast(`${result.message || "检测完成"}${result.observed_ip ? ` · 出口 IP：${result.observed_ip}` : ""}${result.error ? ` · ${result.error}` : ""}`, result.error ? "warn" : "success");
-      } catch (error) {
-        showToast(`检测失败：${error.message || error}`, "error");
-      }
-    });
-    $("saveProxyBtn").addEventListener("click", async () => {
-      const name = $("proxyName").value.trim();
-      const server = $("proxyServer").value.trim();
-      if (!name) return showToast("请填写代理名称", "warn");
-      if (!server) return showToast("请填写代理服务器", "warn");
-      try {
-        await json("/api/proxies", {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({
-            name,
-            proxy_type: $("proxyType").value,
-            server,
-            username: $("proxyUsername").value.trim(),
-            password: $("proxyPassword").value,
-            status: $("proxyStatus").value,
-          }),
-        });
-        $("proxyName").value = "";
-        $("proxyServer").value = "";
-        $("proxyUsername").value = "";
-        $("proxyPassword").value = "";
-        closeModal("proxyModal");
-        await refreshAll();
-      } catch (error) {
-        showToast(`保存代理失败：${error.message || error}`, "error");
       }
     });
     $("candidateBtn").addEventListener("click", async () => {
@@ -883,7 +759,6 @@
       $("accountName").disabled = false;
       $("accountName").value = "";
       $("accountCookie").value = "";
-      $("cookieProxy").value = "";
       openModal("cookieModal");
     });
     $("saveCookieBtn").addEventListener("click", async () => {
@@ -891,13 +766,11 @@
       const name = $("accountName").value.trim();
       if (!cookie) return showToast("请粘贴 Cookie", "warn");
       try {
-        const proxy_id = $("cookieProxy").value ? Number($("cookieProxy").value) : null;
         if (state.cookieAccountId) {
           await json(`/api/accounts/${state.cookieAccountId}/cookie`, { method: "POST", headers: headers(), body: JSON.stringify({ cookie }) });
-          await json(`/api/accounts/${state.cookieAccountId}/proxy`, { method: "POST", headers: headers(), body: JSON.stringify({ proxy_id, restart: true }) });
         } else {
           if (!name) return showToast("请填写账号备注", "warn");
-          await json("/api/accounts", { method: "POST", headers: headers(), body: JSON.stringify({ name, cookie, proxy_id }) });
+          await json("/api/accounts", { method: "POST", headers: headers(), body: JSON.stringify({ name, cookie }) });
         }
         closeModal("cookieModal");
         await refreshAll();
@@ -916,19 +789,30 @@
     });
     $("qrBtn").addEventListener("click", () => openModal("qrModal"));
     $("startQrBtn").addEventListener("click", async () => {
+      if (state.qrStarting || state.qrSessionId) return;
+      state.qrStarting = true;
+      $("startQrBtn").disabled = true;
+      const generation = state.qrGeneration;
       try {
         $("qrMessage").textContent = "正在启动浏览器并生成二维码...";
         const name = $("qrAccountName").value.trim() || `account-${Date.now()}`;
-        const proxy_id = $("qrProxy").value ? Number($("qrProxy").value) : null;
-        const result = await json("/api/accounts/qrcode/start", { method: "POST", headers: headers(), body: JSON.stringify({ name, proxy_id }) });
+        const result = await json("/api/accounts/qrcode/start", { method: "POST", headers: headers(), body: JSON.stringify({ name }) });
+        if (generation !== state.qrGeneration) {
+          await json(`/api/accounts/qrcode/${result.session_id}`, { method: "DELETE" }).catch(() => null);
+          return;
+        }
         state.qrSessionId = result.session_id;
         $("qrImage").src = result.qrcode;
         $("qrImage").classList.remove("hidden");
         $("qrMessage").textContent = "请扫码登录，登录成功后会自动加入账号池。";
-        if (state.qrTimer) clearInterval(state.qrTimer);
-        state.qrTimer = setInterval(pollQr, 3000);
+        state.qrTimer = setTimeout(pollQr, 3000);
       } catch (error) {
-        $("qrMessage").textContent = `二维码启动失败：${error.message || error}`;
+        if (generation === state.qrGeneration) $("qrMessage").textContent = `二维码启动失败：${error.message || error}`;
+      } finally {
+        if (generation === state.qrGeneration) {
+          state.qrStarting = false;
+          if (!state.qrSessionId) $("startQrBtn").disabled = false;
+        }
       }
     });
     $("closeQrBtn").addEventListener("click", closeQr);
@@ -1024,7 +908,6 @@
 
   bindEvents();
   renderTaskForm();
-  refreshProxySelects();
   refreshAll();
   setInterval(refreshAll, 10000);
 })();

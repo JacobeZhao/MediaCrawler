@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
 from ..dependencies import get_task_service
 from ..schemas.tasks import (
@@ -40,6 +40,11 @@ async def create_note_task(req: NoteTaskRequest):
 @router.get("")
 async def list_tasks():
     return await get_task_service().list_tasks()
+
+
+@router.delete("")
+async def delete_tasks(task_ids: list[int] = Body(embed=True)):
+    return await get_task_service().delete_tasks(task_ids)
 
 
 @router.get("/{task_id}")

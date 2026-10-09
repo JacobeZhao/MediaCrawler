@@ -480,6 +480,169 @@ class AccountServiceContractTests(unittest.TestCase):
             '''
         )
 
+    def test_concurrent_qr_polls_adopt_account_once(self):
+        self._run_case(
+            r'''
+            async def run():
+                events = []
+                session = {
+                    "engine": None,
+                    "name": "qr-account",
+                    "proxy_id": None,
+                    "session_before": "before",
+                }
+
+                class Engine:
+                    async def check_qrcode_login_done(self, session_before):
+                        await asyncio.sleep(0)
+                        events.append("checked")
+                        return {"done": True, "verified": True, "cookie": "web_session=test"}
+
+                session["engine"] = Engine()
+
+                class Sessions:
+                    async def get(self, session_id):
+                        return session
+
+                    def forget(self, session_id):
+                        events.append("forgotten")
+
+                class Pool:
+                    async def adopt_engine(self, account_id, engine):
+                        events.append("adopted")
+
+                class Manager:
+                    async def requeue_paused_tasks_now(self):
+                        pass
+
+                async def add(name, cookie, proxy_id):
+                    events.append("added")
+                    await asyncio.sleep(0)
+                    return 71
+
+                async def update(account_id, **values):
+                    events.append("updated")
+
+                sdb.add_account = add
+                sdb.update_account = update
+                service = AccountService(Pool(), Sessions(), Manager())
+                first, second = await asyncio.gather(
+                    service.poll_qrcode("sid"), service.poll_qrcode("sid")
+                )
+                assert first == second
+                assert first["status"] == "success"
+                assert events.count("added") == 1
+                assert events.count("adopted") == 1
+
+            asyncio.run(run())
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
+    def test_cancel_waits_for_inflight_qr_poll(self):
+        self._run_case(
+            r'''
+            import tempfile
+            import time
+            from service.services.account_service import QrSessionService
+
+            async def run():
+                checking = asyncio.Event()
+                release = asyncio.Event()
+                events = []
+
+                class Engine:
+                    async def check_qrcode_login_done(self, session_before):
+                        checking.set()
+                        await release.wait()
+                        events.append("checked")
+                        return {"done": False}
+
+                    async def stop(self):
+                        events.append("stopped")
+
+                with tempfile.TemporaryDirectory() as root:
+                    sessions = QrSessionService(root)
+                    sessions._sessions["sid"] = {
+                        "engine": Engine(),
+                        "name": "qr-account",
+                        "session_before": "before",
+                        "created_at": time.monotonic(),
+                    }
+                    service = AccountService(None, sessions)
+                    poll = asyncio.create_task(service.poll_qrcode("sid"))
+                    await checking.wait()
+                    cancel = asyncio.create_task(service.cancel_qrcode("sid"))
+                    await asyncio.sleep(0)
+                    assert events == []
+                    release.set()
+                    assert (await poll)["status"] == "pending"
+                    await cancel
+                    assert events == ["checked", "stopped"]
+                    assert "sid" not in sessions._sessions
+
+            asyncio.run(run())
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
+    def test_cancel_does_not_stop_engine_after_successful_qr_poll(self):
+        self._run_case(
+            r'''
+            import tempfile
+            import time
+            from service.services.account_service import QrSessionService
+
+            async def run():
+                checking = asyncio.Event()
+                release = asyncio.Event()
+                events = []
+
+                class Engine:
+                    async def check_qrcode_login_done(self, session_before):
+                        checking.set()
+                        await release.wait()
+                        return {"done": True, "verified": True, "cookie": "web_session=test"}
+
+                    async def stop(self):
+                        events.append("stopped")
+
+                class Pool:
+                    async def adopt_engine(self, account_id, engine):
+                        events.append("adopted")
+
+                async def add(name, cookie, proxy_id):
+                    events.append("added")
+                    return 71
+
+                async def update(account_id, **values):
+                    events.append("updated")
+
+                sdb.add_account = add
+                sdb.update_account = update
+                with tempfile.TemporaryDirectory() as root:
+                    sessions = QrSessionService(root)
+                    sessions._sessions["sid"] = {
+                        "engine": Engine(),
+                        "name": "qr-account",
+                        "session_before": "before",
+                        "created_at": time.monotonic(),
+                    }
+                    service = AccountService(Pool(), sessions)
+                    poll = asyncio.create_task(service.poll_qrcode("sid"))
+                    await checking.wait()
+                    cancel = asyncio.create_task(service.cancel_qrcode("sid"))
+                    release.set()
+                    assert (await poll)["status"] == "success"
+                    await cancel
+                    assert events == ["added", "adopted", "updated"]
+                    assert "sid" not in sessions._sessions
+
+            asyncio.run(run())
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

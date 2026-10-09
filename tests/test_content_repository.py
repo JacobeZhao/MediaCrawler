@@ -10,7 +10,7 @@ from database import db_session
 from database.models import XhsContentSource, XhsCreator, XhsNote, XhsNoteComment
 from store import xhs as xhs_store
 from store.xhs._store_impl import XhsSqliteStoreImplement
-from var import source_keyword_var
+from var import source_keyword_var, task_id_var
 
 
 class _TemporaryDatabaseTest(unittest.IsolatedAsyncioTestCase):
@@ -238,6 +238,22 @@ class ContentRepositoryTests(_TemporaryDatabaseTest):
         self.assertEqual("local", source.provider)
         self.assertEqual(0, source.task_id)
         self.assertEqual("legacy-keyword", source.source_keyword)
+
+    async def test_nested_store_entrypoints_use_scoped_task_id_for_note_and_comment(self):
+        token = task_id_var.set(73)
+        try:
+            await xhs_store.update_xhs_note({"note_id": "scoped-note", "title": "scoped"})
+            await xhs_store.update_xhs_note_comment(
+                "scoped-note", {"id": "scoped-comment", "content": "body"}
+            )
+        finally:
+            task_id_var.reset(token)
+        self.assertEqual(0, task_id_var.get())
+        async with db_session.get_session() as session:
+            sources = (await session.execute(select(XhsContentSource))).scalars().all()
+        self.assertEqual({("note", 73), ("comment", 73)}, {
+            (source.entity_type, source.task_id) for source in sources
+        })
 
 
 class ContentSchemaMigrationTests(_TemporaryDatabaseTest):

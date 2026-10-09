@@ -217,6 +217,43 @@ class TaskServiceProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(task["params"])["provider_options"]["max_requests"], 5)
         self.assertEqual(task["checkpoint_json"]["request_count"], 1)
 
+    async def test_deleted_task_between_read_and_resume_returns_404(self):
+        manager = FakeTaskManager({"local": ProviderReadiness(enabled=True, ready=True)})
+        service = TaskService(manager)
+        task_id = await db.create_task(db.TaskType.SEARCH, {"keyword": "race"})
+        await db.update_task_status(task_id, db.TaskStatus.COMPLETED)
+        original_get_task = service.get_task
+
+        async def delete_after_read(selected_id):
+            task = await original_get_task(selected_id)
+            await db.delete_tasks([selected_id])
+            return task
+
+        service.get_task = delete_after_read
+        with self.assertRaises(HTTPException) as caught:
+            await service.resume_task(task_id)
+        self.assertEqual(404, caught.exception.status_code)
+        self.assertEqual([], manager.requeued)
+
+    async def test_deleted_task_between_search_lookup_and_reset_returns_404(self):
+        manager = FakeTaskManager({"local": ProviderReadiness(enabled=True, ready=True)})
+        service = TaskService(manager)
+        task_id = await db.create_task(db.TaskType.SEARCH, {"keyword": "race-search"})
+        await db.update_task_status(task_id, db.TaskStatus.COMPLETED, notes_count=1)
+        original_find = db.find_latest_search_task
+
+        async def delete_after_find(*args, **kwargs):
+            task = await original_find(*args, **kwargs)
+            await db.delete_tasks([task["id"]])
+            return task
+
+        from unittest.mock import patch
+        with patch.object(db, "find_latest_search_task", side_effect=delete_after_find):
+            with self.assertRaises(HTTPException) as caught:
+                await service.create_search_task(SearchTaskRequest(keyword="race-search", max_notes=2))
+        self.assertEqual(404, caught.exception.status_code)
+        self.assertEqual([], manager.requeued)
+
     def test_provider_options_reject_unknown_billing_controls(self):
         with self.assertRaises(ValidationError):
             JustOneApiOptions.model_validate({"max_request": 1})

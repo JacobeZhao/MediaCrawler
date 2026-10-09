@@ -3,23 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>XHS Crawler Console</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <title>小皮爬虫服务</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20261009-2">
 </head>
 <body>
 <div class="app">
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <div class="brand-title">XHS Crawler Console</div>
-        <div class="brand-subtitle">小红书采集服务运维台</div>
+        <div class="brand-title">小皮爬虫服务</div>
       </div>
       <div class="top-actions">
-        <span id="servicePill" class="pill neutral">加载中</span>
-        <span id="protectionPill" class="pill neutral">保护策略</span>
-        <span class="pill neutral">队列 <b id="queueSize">0</b></span>
-        <span class="pill neutral">可用账号 <b id="readyAccounts">0</b>/<b id="totalAccounts">0</b></span>
-        <span class="muted small-text" id="lastRefresh">未刷新</span>
+        <button class="btn primary" id="openCreateBtn" type="button">新增任务</button>
         <button class="btn ghost small" id="refreshBtn">刷新</button>
       </div>
     </div>
@@ -28,50 +23,21 @@
   <main class="shell">
     <div id="apiError" class="alert hidden" role="alert"></div>
 
-    <section class="grid-overview" aria-label="任务总览">
-      <div class="metric"><div class="metric-label">运行中</div><div class="metric-value" id="mRunning">0</div><div class="metric-foot">正在占用账号执行</div></div>
-      <div class="metric"><div class="metric-label">等待中</div><div class="metric-value" id="mPending">0</div><div class="metric-foot">队列内待执行</div></div>
-      <div class="metric"><div class="metric-label">暂停/失败</div><div class="metric-value" id="mBlocked">0</div><div class="metric-foot" id="mBlockedText">异常任务</div></div>
-      <div class="metric"><div class="metric-label">累计笔记</div><div class="metric-value" id="mNotes">0</div><div class="metric-foot">当前任务口径</div></div>
-      <div class="metric"><div class="metric-label">累计评论</div><div class="metric-value" id="mComments">0</div><div class="metric-foot">当前任务口径</div></div>
-      <div class="metric"><div class="metric-label">账号可用率</div><div class="metric-value" id="mAccountRate">0%</div><div class="metric-foot" id="mAccountText">暂无账号</div></div>
-    </section>
-
     <section class="layout">
       <aside class="panel account-panel">
         <div class="panel-head">
           <div>
             <h2 class="panel-title">账号池</h2>
-            <div class="panel-note">账号状态会直接影响队列是否继续执行</div>
           </div>
-          <div class="row">
+          <div class="row account-actions">
             <button class="btn ghost small" id="candidateBtn">候选账号</button>
-            <button class="btn ghost small" id="proxyConfigBtn">代理配置</button>
             <button class="btn primary small" id="healthBtn">健康检查</button>
+            <button class="btn ghost small" id="openCookieBtn">添加 Cookie</button>
+            <button class="btn ghost small" id="qrBtn">二维码登录</button>
           </div>
         </div>
         <div class="panel-body">
-          <div class="account-summary">
-            <div class="mini-stat"><span class="small-text muted">可用</span><b id="aReady">0</b></div>
-            <div class="mini-stat"><span class="small-text muted">验证码</span><b id="aCaptcha">0</b></div>
-            <div class="mini-stat"><span class="small-text muted">异常</span><b id="aBad">0</b></div>
-            <div class="mini-stat"><span class="small-text muted">总数</span><b id="aTotal">0</b></div>
-          </div>
-          <div class="proxy-section mt-md">
-            <div class="row-between">
-              <div>
-                <div class="label">代理配置</div>
-                <div class="small-text muted">共 <b id="proxyCount">0</b> 个配置，密码不会展示</div>
-              </div>
-              <button class="btn ghost small" id="addProxyBtn">添加代理</button>
-            </div>
-            <div class="proxy-list mt-sm" id="proxyList"></div>
-          </div>
           <div class="account-list" id="accountList"></div>
-          <div class="row mt-md">
-            <button class="btn ghost" id="openCookieBtn">添加 Cookie</button>
-            <button class="btn ghost" id="qrBtn">二维码登录</button>
-          </div>
         </div>
       </aside>
 
@@ -79,19 +45,25 @@
         <div class="panel-head">
           <div class="panel-title-block">
             <h2 class="panel-title">任务列表</h2>
-            <div class="panel-note">实时展示每个任务的笔记数、评论数、目标和最近状态</div>
           </div>
           <div class="task-toolbar">
-            <select class="select task-status-filter" id="taskStatusFilter">
-              <option value="">全部状态</option>
-              <option value="running">运行中</option>
-              <option value="pending">等待中</option>
-              <option value="paused">已暂停</option>
-              <option value="failed">失败</option>
-              <option value="completed">完成</option>
-            </select>
-            <input class="input task-keyword-filter" id="taskKeywordFilter" placeholder="筛关键词">
-            <button class="btn ghost" id="exportBtn">导出 Excel</button>
+            <div class="task-filters">
+              <select class="select task-status-filter" id="taskStatusFilter">
+                <option value="">全部状态</option>
+                <option value="running">运行中</option>
+                <option value="pending">等待中</option>
+                <option value="paused">已暂停</option>
+                <option value="failed">失败</option>
+                <option value="completed">完成</option>
+              </select>
+              <input class="input task-keyword-filter" id="taskKeywordFilter" placeholder="筛关键词">
+            </div>
+            <div class="task-bulk">
+              <label class="small-text select-visible-label" for="selectVisibleTasks"><input type="checkbox" id="selectVisibleTasks"> 全选</label>
+              <span class="small-text muted selection-count" id="selectionCount">已选 0 项</span>
+              <button class="btn ghost" id="exportBtn" disabled>导出 Excel</button>
+              <button class="btn danger" id="deleteTasksBtn" disabled>删除</button>
+            </div>
           </div>
         </div>
         <div class="table-wrap">
@@ -99,6 +71,7 @@
             <caption class="sr-only">任务执行列表</caption>
             <thead>
               <tr>
+                <th scope="col" class="col-select"><span class="sr-only">选择</span></th>
                 <th scope="col" class="col-id">ID</th>
                 <th scope="col">任务</th>
                 <th scope="col" class="col-provider">方式</th>
@@ -114,12 +87,13 @@
         </div>
       </div>
 
-      <aside class="panel create-panel">
+      <div class="modal" id="createTaskModal" role="dialog" aria-modal="true" aria-labelledby="createTaskModalTitle">
+        <div class="modal-card create-modal-card">
           <div class="panel-head">
             <div>
-              <h2 class="panel-title">创建任务</h2>
-              <div class="panel-note">选择爬取方式后，可提交单个或批量任务</div>
+              <h2 class="panel-title" id="createTaskModalTitle">创建任务</h2>
             </div>
+            <button class="btn ghost small" type="button" data-close="createTaskModal">关闭</button>
           </div>
           <div class="panel-body">
             <div class="tabs task-type-tabs" role="tablist" aria-label="任务类型">
@@ -219,7 +193,8 @@
               <button class="btn dark full-width mt-md">提交批量笔记</button>
             </form>
           </div>
-      </aside>
+        </div>
+      </div>
     </section>
   </main>
 </div>
@@ -235,28 +210,6 @@
 </div>
 
 <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-
-<div class="modal" id="proxyModal" role="dialog" aria-modal="true" aria-labelledby="proxyModalTitle">
-  <div class="modal-card">
-    <div class="modal-head">
-      <b id="proxyModalTitle">添加代理</b>
-      <button class="btn ghost small" data-close="proxyModal">关闭</button>
-    </div>
-    <div class="modal-body">
-      <div class="field"><label class="label">代理名称</label><input class="input" id="proxyName" placeholder="例如：上海-1"></div>
-      <div class="form-grid mt-md">
-        <div class="field"><label class="label">类型</label><select class="select" id="proxyType"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></div>
-        <div class="field"><label class="label">状态</label><select class="select" id="proxyStatus"><option value="active">启用</option><option value="inactive">停用</option></select></div>
-      </div>
-      <div class="field mt-md"><label class="label">服务器</label><input class="input" id="proxyServer" placeholder="host:port 或 http://host:port"></div>
-      <div class="form-grid mt-md">
-        <div class="field"><label class="label">用户名</label><input class="input" id="proxyUsername" autocomplete="off"></div>
-        <div class="field"><label class="label">密码</label><input class="input" id="proxyPassword" type="password" autocomplete="new-password"></div>
-      </div>
-      <button class="btn primary full-width mt-md" id="saveProxyBtn">保存代理</button>
-    </div>
-  </div>
-</div>
 
 <div class="modal" id="candidateModal" role="dialog" aria-modal="true" aria-labelledby="candidateModalTitle">
   <div class="modal-card candidate-modal-card">
@@ -282,7 +235,6 @@
     </div>
     <div class="modal-body">
       <div class="field"><label class="label">账号备注</label><input class="input" id="accountName" placeholder="例如：账号-1"></div>
-      <div class="field mt-md"><label class="label">代理</label><select class="select" id="cookieProxy"></select></div>
       <div class="field mt-md"><label class="label">Cookie</label><textarea class="textarea cookie-textarea" id="accountCookie"></textarea></div>
       <button class="btn primary full-width mt-md" id="saveCookieBtn">保存并验证</button>
     </div>
@@ -297,7 +249,6 @@
     </div>
     <div class="modal-body">
       <div class="field"><label class="label">账号备注</label><input class="input" id="qrAccountName" value="new-account"></div>
-      <div class="field mt-md"><label class="label">代理</label><select class="select" id="qrProxy"></select></div>
       <button class="btn primary full-width mt-md" id="startQrBtn">生成二维码</button>
       <img id="qrImage" class="qr-img hidden" alt="登录二维码">
       <div class="muted small-text text-center" id="qrMessage">生成后请扫码确认登录</div>
@@ -305,7 +256,7 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20261009-2"></script>
 
 </body>
 </html>

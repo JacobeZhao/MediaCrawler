@@ -9,6 +9,7 @@ from typing import Any, Dict, Set
 from config.settings import settings
 from media_platform.xhs.help import parse_note_info_from_note_url
 from tools.redaction import redact_sensitive_text
+from var import task_id_var
 
 from .. import service_db as db
 from ..account_pool import AccountPool
@@ -112,12 +113,16 @@ class LocalTaskExecutor(TaskExecutor):
             tried_engines.add(engine_key)
 
             try:
-                return await self._execute_with_engine(
-                    engine,
-                    task["task_type"],
-                    params,
-                    context,
-                )
+                task_token = task_id_var.set(context.task_id)
+                try:
+                    return await self._execute_with_engine(
+                        engine,
+                        task["task_type"],
+                        params,
+                        context,
+                    )
+                finally:
+                    task_id_var.reset(task_token)
             except Exception as exc:
                 if not isinstance(exc, CaptchaException) and not _is_recoverable_account_error(exc):
                     raise
