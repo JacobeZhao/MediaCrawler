@@ -429,14 +429,15 @@ class AccountServiceContractTests(unittest.TestCase):
                     def __init__(self, result):
                         self.engine = Engine(result)
                         self.forgotten = []
-
-                    async def get(self, session_id):
-                        return {
+                        self.session = {
                             "engine": self.engine,
                             "name": "qr-account",
                             "proxy_id": None,
                             "session_before": "before",
                         }
+
+                    async def get(self, session_id):
+                        return self.session
 
                     def forget(self, session_id):
                         self.forgotten.append(session_id)
@@ -468,13 +469,96 @@ class AccountServiceContractTests(unittest.TestCase):
                     "error": "verification failed",
                 })
                 service = AccountService(ForbiddenPool(), sessions, SimpleNamespace(requeue_paused_tasks_now=forbidden))
+                pending = await service.poll_qrcode("session-id")
+                assert pending == {"status": "pending", "message": "Verifying QR login."}
+                assert "legacy-cookie" not in repr(pending)
+                assert "verification_deadline" in sessions.session
+                assert sessions.forgotten == []
+                sessions.session["verification_deadline"] = 0
                 try:
                     await service.poll_qrcode("session-id")
-                    raise AssertionError("unverified QR must raise")
+                    raise AssertionError("expired verification must raise")
                 except HTTPException as exc:
-                    assert (exc.status_code, exc.detail) == (400, "verification failed")
-                assert sessions.forgotten == []
+                    assert (exc.status_code, exc.detail) == (400, "QR login verification timed out.")
+                    assert "legacy-cookie" not in str(exc.detail)
 
+            asyncio.run(run())
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
+    def test_qr_verification_retries_then_adopts_only_after_verified(self):
+        self._run_case(
+            r'''
+            async def run():
+                events = []
+                results = iter((
+                    {"done": True, "verified": False, "cookie": "secret-cookie"},
+                    {"done": True, "verified": True, "cookie": "secret-cookie"},
+                ))
+                class Engine:
+                    async def check_qrcode_login_done(self, session_before):
+                        events.append("check")
+                        return next(results)
+                session = {"engine": Engine(), "name": "qr", "session_before": "before"}
+                class Sessions:
+                    async def get(self, sid): return session
+                    def forget(self, sid): events.append("forget")
+                class Pool:
+                    async def adopt_engine(self, account_id, engine): events.append("adopt")
+                async def add(name, cookie, proxy_id):
+                    events.append("add")
+                    assert cookie == "secret-cookie"
+                    return 7
+                async def update(account_id, **values): events.append("update")
+                sdb.add_account = add
+                sdb.update_account = update
+                service = AccountService(Pool(), Sessions())
+                pending = await service.poll_qrcode("sid")
+                assert pending == {"status": "pending", "message": "Verifying QR login."}
+                assert events == ["check"]
+                success = await service.poll_qrcode("sid")
+                assert success["status"] == "success"
+                assert "secret-cookie" not in repr(success)
+                assert events == ["check", "check", "add", "adopt", "update", "forget"]
+            asyncio.run(run())
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
+    def test_qr_slow_verified_response_after_deadline_cannot_persist(self):
+        self._run_case(
+            r'''
+            from unittest.mock import patch
+
+            async def run():
+                async def forbidden(*args, **kwargs):
+                    raise AssertionError("expired verification must not persist")
+                clock = {"now": 0}
+                class Engine:
+                    def __init__(self): self.calls = 0
+                    async def check_qrcode_login_done(self, session_before):
+                        self.calls += 1
+                        if self.calls == 1:
+                            return {"done": True, "verified": False}
+                        clock["now"] = 31
+                        return {"done": True, "verified": True, "cookie": "secret-cookie"}
+                session = {"engine": Engine(), "name": "qr", "session_before": "before"}
+                class Sessions:
+                    async def get(self, sid): return session
+                    def forget(self, sid): raise AssertionError("expired session must not transfer")
+                class Pool:
+                    adopt_engine = forbidden
+                sdb.add_account = forbidden
+                sdb.update_account = forbidden
+                service = AccountService(Pool(), Sessions())
+                with patch("service.services.account_service.time.monotonic", lambda: clock["now"]):
+                    assert (await service.poll_qrcode("sid"))["status"] == "pending"
+                    try:
+                        await service.poll_qrcode("sid")
+                        raise AssertionError("late success must fail")
+                    except HTTPException as exc:
+                        assert (exc.status_code, exc.detail) == (400, "QR login verification timed out.")
             asyncio.run(run())
             print('RESULT=' + json.dumps({"ok": True}))
             '''

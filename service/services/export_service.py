@@ -174,7 +174,7 @@ class ExportService:
             note.get("note_url", f"https://www.xiaohongshu.com/explore/{note_id}"),
         ]
         for col, value in enumerate(values, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell = ws.cell(row=row_idx, column=col, value=self._safe_excel_value(value))
             cell.alignment = Alignment(vertical="top", wrap_text=(col == 4))
 
         ws.row_dimensions[row_idx].height = 92
@@ -184,7 +184,7 @@ class ExportService:
             local_path = os.path.join(self._image_dir, note_id, f"{img_idx}.jpg")
             img_bytes = await self._fetch_image_bytes_threadsafe(url, local_path)
             if not img_bytes:
-                ws.cell(row=row_idx, column=col_idx, value=url)
+                ws.cell(row=row_idx, column=col_idx, value=self._safe_excel_value(url))
                 continue
             jpeg_bytes = self._to_jpeg(img_bytes) or img_bytes
             try:
@@ -193,7 +193,7 @@ class ExportService:
                 xl_img.height = 120
                 ws.add_image(xl_img, f"{col_letter}{row_idx}")
             except Exception:
-                ws.cell(row=row_idx, column=col_idx, value=url)
+                ws.cell(row=row_idx, column=col_idx, value=self._safe_excel_value(url))
 
     async def _fetch_image_bytes_threadsafe(self, url: str, local_path: str) -> Optional[bytes]:
         return await asyncio.to_thread(self._fetch_image_bytes, url, local_path)

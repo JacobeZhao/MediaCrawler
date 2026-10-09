@@ -213,13 +213,19 @@ class AccountService:
                 raise HTTPException(404, "QR session not found or expired.")
             if "poll_result" in session:
                 return session["poll_result"]
+            deadline = session.get("verification_deadline")
+            if deadline is not None and time.monotonic() >= deadline:
+                raise HTTPException(400, "QR login verification timed out.")
             eng: XHSCrawlerEngine = session["engine"]
             result = await eng.check_qrcode_login_done(session["session_before"])
+            if deadline is not None and time.monotonic() >= deadline:
+                raise HTTPException(400, "QR login verification timed out.")
 
             if result.get("done"):
                 cookie_str = result.get("cookie", "")
                 if not result.get("verified"):
-                    raise HTTPException(400, result.get("error") or "QR login finished but account verification failed.")
+                    session.setdefault("verification_deadline", time.monotonic() + 30)
+                    return {"status": "pending", "message": "Verifying QR login."}
                 name = session["name"]
                 proxy_id = session.get("proxy_id")
                 account_id = await self._repository.add_account(name, cookie_str, proxy_id)

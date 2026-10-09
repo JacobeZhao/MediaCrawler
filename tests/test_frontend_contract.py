@@ -21,12 +21,12 @@ EXPECTED_JS_IDS = {
     "justoneMaxRequests", "justoneNoteType", "justoneTimeFilter",
     "noteBatchForm", "noteSingleForm", "openCookieBtn", "openCreateBtn",
     "providerReadiness", "qrAccountName", "qrBtn", "qrImage", "qrMessage",
-    "refreshBtn", "selectVisibleTasks", "selectionCount",
+    "refreshBtn", "selectVisibleTasks", "selectionCount", "serviceStatus", "serviceStatusText",
     "taskCompletedValue", "taskCompletionValue", "taskTotalValue",
     "reloadCandidatesBtn", "saveCookieBtn", "searchBatchForm",
     "searchSingleForm", "startQrBtn", "taskDetailBody",
     "taskDetailDrawer", "taskDetailStatus", "taskDetailTitle",
-    "taskKeywordFilter", "taskRows", "taskStatusFilter", "toastRegion",
+    "taskRows", "taskStatusFilter", "toastRegion",
 }
 
 EXPECTED_FRONTEND_ENDPOINTS = {
@@ -243,8 +243,17 @@ class FrontendContractTests(unittest.TestCase):
         self.assertLessEqual(set(self.markup.references), html_ids)
 
     def test_static_assets_and_task_control_domains_are_stable(self):
-        self.assertEqual(self.markup.hrefs, ["/static/styles.css?v=20261009-3"])
-        self.assertEqual(self.markup.srcs, ["/static/app.js?v=20261009-3"])
+        self.assertEqual(self.markup.hrefs, [
+            "/static/crawler-logo.svg?v=20261009-4",
+            "/static/styles.css?v=20261009-7",
+        ])
+        self.assertEqual(self.markup.srcs, [
+            "/static/crawler-logo.svg?v=20261009-4",
+            "/static/app.js?v=20261009-8",
+        ])
+        self.assertIn('rel="icon" type="image/svg+xml"', self.html)
+        self.assertIn('class="brand-logo"', self.html)
+        self.assertTrue((STATIC_DIR / "crawler-logo.svg").is_file())
         self.assertEqual(set(self.markup.data_values["data-task-type"]), {"search", "creator", "note"})
         self.assertEqual(set(self.markup.data_values["data-task-mode"]), {"single", "batch"})
         self.assertEqual(set(self.markup.data_values["data-task-provider"]), {"local", "justoneapi"})
@@ -256,7 +265,7 @@ class FrontendContractTests(unittest.TestCase):
     def test_account_pool_is_first_and_proxy_configuration_is_not_exposed(self):
         self.assertLess(
             self.html.index('class="panel account-panel"'),
-            self.html.index('class="panel workspace-panel"'),
+            self.html.index('class="workspace-panel"'),
         )
         self.assertIn('grid-template-areas:"resources workspace"', self.css)
         self.assertIn('grid-template-areas:"resources" "workspace"', self.css)
@@ -279,16 +288,60 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('id="deleteTasksBtn" disabled', self.html)
         self.assertIn('id="exportBtn" disabled', self.html)
 
-    def test_summary_and_compact_task_columns(self):
+    def test_summary_and_task_cards(self):
         self.assertIn('class="summary-strip"', self.html)
         self.assertLess(self.html.index('class="summary-strip"'), self.html.index('class="layout"'))
         self.assertNotIn('<h2 class="panel-title">账号池</h2>', self.html)
-        self.assertNotIn('class="col-id"', self.html)
-        self.assertNotIn('class="col-provider"', self.html)
-        self.assertIn('colspan="7"', self.javascript)
+        self.assertIn('class="task-list" id="taskRows" role="list"', self.html)
+        self.assertIn('class="workspace-panel" aria-label=', self.html)
+        self.assertNotIn('id="taskListTitle"', self.html)
+        self.assertNotIn('<table', self.html)
+        self.assertIn('<article class="task-card', self.javascript)
+        self.assertIn('role="listitem" data-task-id=', self.javascript)
+        self.assertIn('data-select-task-id=', self.javascript)
+        self.assertIn('data-view-id=', self.javascript)
+        self.assertIn('data-resume-id=', self.javascript)
+        self.assertIn('data-recrawl-id=', self.javascript)
+        self.assertIn('.summary-strip{gap:10px;background:transparent;border:0', self.css)
+        self.assertIn('.workspace-panel{background:var(--panel);border:1px solid var(--line);border-radius:6px', self.css)
+        self.assertIn('.workspace-panel .panel-head{padding:14px 16px;border-bottom:1px solid var(--line-soft)}', self.css)
+        self.assertIn('.task-list{display:grid;align-content:start;gap:0;flex:1;min-height:0;overflow:auto', self.css)
+        self.assertIn('.task-card{min-width:0;padding:14px 0;border-bottom:1px solid var(--line-soft);background:transparent', self.css)
+        self.assertLess(self.javascript.index('class="task-card-primary"'), self.javascript.index('class="task-card-secondary"'))
+        self.assertIn('class="task-message"', self.javascript)
+        self.assertIn('class="task-card-progress"', self.javascript)
+        self.assertIn('.task-card-progress{display:flex;align-items:center;gap:8px;min-width:0}', self.css)
         self.assertIn('state.status.task_counts', self.javascript)
         self.assertIn('"crawling"', self.javascript)
         self.assertNotIn('s === "active"', self.javascript)
+
+    def test_service_status_uses_provider_readiness_and_connection_errors(self):
+        self.assertIn('id="serviceStatus" role="status" aria-live="polite"', self.html)
+        self.assertIn('Object.values(status.providers || {}).some(provider => provider.ready)', self.javascript)
+        self.assertLess(
+            self.javascript.index('if (running || status.status === "crawling")'),
+            self.javascript.index('if (providerReady && queued)'),
+        )
+        self.assertIn('setServiceStatus("连接异常", "error")', self.javascript)
+        self.assertIn('renderServiceStatus();', self.javascript)
+        self.assertIn('.top-actions .btn{width:104px}', self.css)
+        self.assertIn('.task-card-actions .btn{width:64px;min-width:64px}', self.css)
+
+    def test_task_toolbar_keeps_selection_and_status_filter_without_search(self):
+        self.assertNotIn("taskKeywordFilter", self.html)
+        self.assertNotIn("taskKeywordFilter", self.javascript)
+        self.assertLess(self.html.index('id="exportBtn"'), self.html.index('id="deleteTasksBtn"'))
+        self.assertLess(self.html.index('id="deleteTasksBtn"'), self.html.index('id="taskStatusFilter"'))
+        self.assertIn('id="taskStatusFilter" aria-label="筛选任务状态"', self.html)
+        self.assertIn('grid-template-columns:auto auto minmax(0,1fr) repeat(3,minmax(104px,1fr))', self.css)
+        self.assertIn('.task-bulk #exportBtn{grid-column:4}', self.css)
+        self.assertIn('.task-bulk #deleteTasksBtn{grid-column:5}', self.css)
+        self.assertIn('.task-bulk .task-status-filter{grid-column:6}', self.css)
+        self.assertIn('.task-bulk .btn,.task-bulk .task-status-filter{width:100%;min-width:0}', self.css)
+        self.assertIn('@media (max-width:600px){', self.css)
+        self.assertIn('.task-bulk{width:100%;grid-template-columns:repeat(3,minmax(0,1fr))', self.css)
+        self.assertIn('.task-bulk .task-status-filter{font-size:12px;padding-left:5px;padding-right:5px}', self.css)
+        self.assertIn('return state.tasks.filter(task => !status || task.status === status)', self.javascript)
 
     def test_frontend_api_manifest_is_implemented_by_routes(self):
         frontend, calls = _javascript_endpoints(self.javascript, "service/static/app.js")

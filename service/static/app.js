@@ -101,6 +101,7 @@
 
   function taskTarget(task) {
     const params = parseParams(task);
+    if (task.task_type === "note" && Array.isArray(params.notes)) return params.notes.length;
     return Number(params.max_notes || 0);
   }
 
@@ -155,6 +156,31 @@
   function isAccountReady(account) {
     const s = accountRuntime(account);
     return s === "ready" || s === "crawling";
+  }
+
+  function setServiceStatus(label, tone) {
+    const indicator = $("serviceStatus");
+    if ($("serviceStatusText").textContent !== label) $("serviceStatusText").textContent = label;
+    indicator.dataset.state = tone;
+  }
+
+  function renderServiceStatus() {
+    const status = state.status;
+    const providerReady = Object.values(status.providers || {}).some(provider => provider.ready);
+    const running = Number(status.task_counts?.running || 0);
+    const queued = Number(status.queue_size || 0);
+    if (running || status.status === "crawling") return setServiceStatus("运行中", "running");
+    if (providerReady && queued) return setServiceStatus("等待执行", "waiting");
+    if (providerReady) return setServiceStatus("就绪", "ready");
+    const fallback = {
+      initializing: ["初始化中", "loading"],
+      waiting_qrcode: ["等待扫码", "waiting"],
+      need_login: ["等待登录", "waiting"],
+      captcha: ["需要验证", "error"],
+      error: ["服务异常", "error"],
+      stopped: ["已停止", "waiting"],
+    }[status.status] || ["无可用来源", "waiting"];
+    setServiceStatus(...fallback);
   }
 
   function renderSummary() {
@@ -275,12 +301,7 @@
 
   function filteredTasks() {
     const status = $("taskStatusFilter").value;
-    const keyword = $("taskKeywordFilter").value.trim().toLowerCase();
-    return state.tasks.filter(task => {
-      if (status && task.status !== status) return false;
-      if (!keyword) return true;
-      return `${taskTitle(task)} ${providerLabel(taskProvider(task))} ${task.progress || ""} ${task.error || ""}`.toLowerCase().includes(keyword);
-    });
+    return state.tasks.filter(task => !status || task.status === status);
   }
 
   function renderTasks() {
@@ -294,7 +315,7 @@
     $("selectVisibleTasks").indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
     $("selectVisibleTasks").disabled = visibleIds.length === 0;
     if (!rows.length) {
-      $("taskRows").innerHTML = `<tr><td colspan="7"><div class="empty">没有匹配的任务</div></td></tr>`;
+      $("taskRows").innerHTML = `<div class="empty">没有匹配的任务</div>`;
       return;
     }
     $("taskRows").innerHTML = rows.map(task => {
@@ -302,36 +323,34 @@
       const prog = progressData(task);
       const notes = Number(task.notes_count ?? prog.notes_count ?? 0);
       const comments = Number(task.comments_count ?? prog.comments_count ?? 0);
-      const target = Number(params.max_notes || 0);
+      const target = taskTarget(task);
       const pct = target ? Math.min(100, Math.round(notes * 100 / target)) : 0;
       const message = prog.message || task.progress || task.error || "";
       const selected = Number(state.selectedTaskId) === Number(task.id) ? " selected" : "";
       const canResume = !["pending", "running"].includes(task.status);
       const canRecrawl = canResume && task.task_type !== "note";
       return `
-        <tr class="task-row${selected}${state.selectedTaskIds.has(Number(task.id)) ? " checked" : ""}" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
-          <td><input type="checkbox" data-select-task-id="${task.id}" aria-label="选择任务 #${task.id}" ${state.selectedTaskIds.has(Number(task.id)) ? "checked" : ""}></td>
-          <td>
-            <div class="truncate strong">${escapeHtml(taskTitle(task))}</div>
-          </td>
-          <td><span class="pill ${statusClass(task.status)}">${statusText(task.status)}</span></td>
-          <td>
-            <div><b>${num(notes)}</b>${target ? ` / ${num(target)}` : ""} 篇</div>
-            <div class="progress"><span style="width:${pct}%"></span></div>
-            <div class="small-text muted">${pct}%</div>
-          </td>
-          <td><b>${num(comments)}</b><div class="small-text muted">目标 ${num(params.max_comments || 0)} / 篇</div></td>
-          <td>
-            <div class="truncate task-message" title="${escapeHtml(message || "-")}">${escapeHtml(compact(message || "-", 48))}</div>
-          </td>
-          <td>
-            <div class="row">
+        <article class="task-card${selected}${state.selectedTaskIds.has(Number(task.id)) ? " checked" : ""}" role="listitem" data-task-id="${task.id}" tabindex="0" aria-label="打开${escapeHtml(taskTitle(task))}详情">
+          <div class="task-card-primary">
+            <input type="checkbox" data-select-task-id="${task.id}" aria-label="选择${escapeHtml(taskTitle(task))}" ${state.selectedTaskIds.has(Number(task.id)) ? "checked" : ""}>
+            <h3 class="task-card-title">${escapeHtml(taskTitle(task))}</h3>
+            <span class="pill ${statusClass(task.status)}">${escapeHtml(statusText(task.status))}</span>
+            <span class="task-message" title="${escapeHtml(message || "-")}">${escapeHtml(compact(message || "-", 48))}</span>
+            <div class="task-card-actions">
               <button class="btn ghost small" data-view-id="${task.id}">查看</button>
               ${canResume ? `<button class="btn ghost small" data-resume-id="${task.id}">续爬</button>` : ""}
               ${canRecrawl ? `<button class="btn danger small" data-recrawl-id="${task.id}">重爬</button>` : ""}
             </div>
-          </td>
-        </tr>
+          </div>
+          <div class="task-card-secondary">
+            <span>笔记 <strong>${num(notes)}${target ? ` / ${num(target)}` : ""}</strong></span>
+            <span>评论 <strong>${num(comments)}</strong><span class="muted"> · 目标 ${num(params.max_comments || 0)} / 篇</span></span>
+            <div class="task-card-progress">
+              <div class="progress" role="progressbar" aria-label="笔记进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+              <span>${pct}%</span>
+            </div>
+          </div>
+        </article>
       `;
     }).join("");
   }
@@ -360,6 +379,7 @@
   }
 
   function renderAll() {
+    renderServiceStatus();
     renderSummary();
     renderAccounts();
     renderCandidates();
@@ -387,6 +407,7 @@
       $("apiError").classList.add("hidden");
       renderAll();
     } catch (error) {
+      setServiceStatus("连接异常", "error");
       $("apiError").textContent = `接口异常：${error.message || error}`;
       $("apiError").classList.remove("hidden");
     } finally {
@@ -408,7 +429,10 @@
 
   function closeTaskDetail() {
     $("taskDetailDrawer").classList.remove("open");
-    if (taskDrawerReturnFocus && typeof taskDrawerReturnFocus.focus === "function") taskDrawerReturnFocus.focus();
+    const focusTarget = taskDrawerReturnFocus?.isConnected
+      ? taskDrawerReturnFocus
+      : $("taskRows").querySelector(`[data-task-id="${state.selectedTaskId}"]`);
+    focusTarget?.focus();
     taskDrawerReturnFocus = null;
   }
 
@@ -578,6 +602,8 @@
       if (error.status === 400 || error.status === 404) {
         state.qrSessionId = "";
         $("startQrBtn").disabled = false;
+        $("qrImage").classList.add("hidden");
+        $("qrImage").removeAttribute("src");
         await json(`/api/accounts/qrcode/${sessionId}`, { method: "DELETE" }).catch(() => null);
       }
     } finally {
@@ -596,7 +622,6 @@
     $("refreshBtn").addEventListener("click", refreshAll);
     $("openCreateBtn").addEventListener("click", () => openModal("createTaskModal"));
     $("taskStatusFilter").addEventListener("change", renderTasks);
-    $("taskKeywordFilter").addEventListener("input", renderTasks);
     $("selectVisibleTasks").addEventListener("change", event => {
       filteredTasks().forEach(task => {
         const id = Number(task.id);
@@ -799,6 +824,8 @@
       if (state.qrStarting || state.qrSessionId) return;
       state.qrStarting = true;
       $("startQrBtn").disabled = true;
+      $("qrImage").classList.add("hidden");
+      $("qrImage").removeAttribute("src");
       const generation = state.qrGeneration;
       try {
         $("qrMessage").textContent = "正在启动浏览器并生成二维码...";

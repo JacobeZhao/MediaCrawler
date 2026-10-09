@@ -173,6 +173,42 @@ class ExportServiceContractTests(unittest.TestCase):
             '''
         )
 
+    def test_note_row_sanitizes_excel_text_and_image_fallback(self):
+        self._run_case(
+            r'''
+            from openpyxl import Workbook
+
+            workbook = Workbook()
+            sheet = workbook.active
+            service = export_service.ExportService(str(temp_root / "images"))
+            service._fetch_image_bytes_threadsafe = AsyncMock(return_value=None)
+            image_url = "=HYPERLINK(\"https://example.test\")\x00"
+            asyncio.run(service._write_note_row(
+                sheet,
+                2,
+                "note-id",
+                {"d_level": "D1", "quality": "A"},
+                {
+                    "title": "Title\x00with control",
+                    "desc": "=SUM(1,2)",
+                    "nickname": "+author",
+                    "note_url": "https://example.test/note\x01",
+                    "image_list": json.dumps([image_url]),
+                },
+            ))
+            output = io.BytesIO()
+            workbook.save(output)
+            output.seek(0)
+            saved = export_service.openpyxl.load_workbook(output).active
+            assert saved.cell(2, 3).value == "Titlewith control"
+            assert saved.cell(2, 4).value == "'=SUM(1,2)"
+            assert saved.cell(2, 5).value == "'+author"
+            assert saved.cell(2, 10).value == "https://example.test/note"
+            assert saved.cell(2, 11).value == "'=HYPERLINK(\"https://example.test\")"
+            print('RESULT=' + json.dumps({"ok": True}))
+            '''
+        )
+
     def test_load_notes_uses_exact_parameterized_query(self):
         self._run_case(
             r'''
